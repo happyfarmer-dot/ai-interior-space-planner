@@ -1,9 +1,11 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ArrowRight,
   Brush,
+  Camera,
   CheckCircle2,
   Grid,
+  ImagePlus,
   Lock,
   Pentagon,
   Ruler,
@@ -12,7 +14,7 @@ import {
   Unlock,
   Upload,
 } from 'lucide-react';
-import { SAMPLE_SCENES } from '../../data/sampleScenes';
+import { HEURISTIC_PROTECTION_ZONES } from '../../data/sampleScenes';
 import { useDesignStore } from '../../store/useDesignStore';
 import type { ProtectionCategory, ScalePreset } from '../../types/design';
 
@@ -46,77 +48,167 @@ export const Step1ImportCalibratePanel: React.FC = () => {
   } = useDesignStore();
 
   const { scene, calibration, protectionZones } = state.present;
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const hasPhoto = Boolean(scene.imageUrl);
+
+  const handleFilePicked = (file: File | undefined | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return;
+    handleUploadCustomRoom(file);
+  };
 
   return (
-    <div className="space-y-5">
-      {/* 1. Room Photo Import / Sample Switcher */}
-      <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5">
-        <div className="mb-2.5 flex items-center justify-between">
+    <div className="space-y-4">
+      {/* 功能 1｜匯入室內現況照片 (無內建範例照片，純拍照與圖片上傳) */}
+      <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
+        <div className="flex items-center justify-between">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-            1. 匯入室內現況照片
+            功能 1｜匯入室內現況照片
           </h3>
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1 rounded-md border border-[#C89F72]/40 bg-[#C89F72]/15 px-2.5 py-1 text-xs font-medium text-[#E2BE96] hover:bg-[#C89F72]/25 transition cursor-pointer"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            上傳照片
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleUploadCustomRoom(file);
-            }}
-          />
+          {hasPhoto && (
+            <span className="flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+              <CheckCircle2 className="h-3 w-3" />
+              已匯入照片
+            </span>
+          )}
         </div>
 
-        <div className="grid grid-cols-1 gap-2">
-          {SAMPLE_SCENES.map((sample) => {
-            const active = scene.id === sample.id;
-            return (
-              <button
-                key={sample.id}
-                type="button"
-                onClick={() => dispatch({ type: 'LOAD_SCENE', scene: sample })}
-                className={`flex items-center gap-2.5 rounded-lg border p-2 text-left transition cursor-pointer ${
-                  active
-                    ? 'border-[#C89F72] bg-[#C89F72]/10'
-                    : 'border-[#2B313C] bg-[#13161B] hover:border-slate-600'
-                }`}
-              >
-                <img
-                  src={sample.imageUrl}
-                  alt={sample.name}
-                  className="h-12 w-20 shrink-0 rounded object-cover"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between">
-                    <span className="truncate text-xs font-semibold text-slate-100">
-                      {sample.name}
-                    </span>
-                    {active && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#C89F72]" />}
-                  </div>
-                  <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-400">
-                    {sample.description}
-                  </p>
-                </div>
-              </button>
-            );
-          })}
+        {/* Hidden Inputs: Camera Capture (mobile) + General File/Album Picker */}
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={(e) => {
+            handleFilePicked(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            handleFilePicked(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+        />
+
+        {/* Drag & Drop Zone */}
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragging(false);
+            handleFilePicked(e.dataTransfer.files?.[0]);
+          }}
+          className={`rounded-xl border-2 border-dashed p-3.5 text-center transition ${
+            isDragging
+              ? 'border-[#C89F72] bg-[#C89F72]/15'
+              : 'border-[#2E3542] bg-[#13161B] hover:border-[#414B5C]'
+          }`}
+        >
+          <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-lg border border-[#2C3340] bg-[#1B2028] text-[#DFBA8C]">
+            <ImagePlus className="h-4.5 w-4.5" />
+          </div>
+          <p className="text-xs font-medium text-slate-200">
+            將室內現況照片拖曳至此處上傳
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            支援 JPG / PNG / WebP／HEIC，手機可直接呼叫相機拍攝或從相簿選取
+          </p>
+
+          {/* Primary Buttons: Camera & Upload */}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => cameraInputRef.current?.click()}
+              className="flex items-center justify-center gap-1.5 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+            >
+              <Camera className="h-3.5 w-3.5" />
+              拍攝照片
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center justify-center gap-1.5 rounded-lg border border-[#C89F72]/50 bg-[#1B2028] py-2 text-xs font-semibold text-[#E2BE96] hover:bg-[#242A35] transition cursor-pointer"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              上傳圖片
+            </button>
+          </div>
         </div>
+
+        {/* Uploaded Image Metadata & Editable Ping */}
+        {hasPhoto && (
+          <div className="space-y-2 rounded-lg border border-[#272D38] bg-[#13161B] p-2.5">
+            <div className="flex items-center gap-2.5">
+              <img
+                src={scene.imageUrl}
+                alt={scene.name}
+                className="h-12 w-20 shrink-0 rounded object-cover border border-white/10"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-slate-100">{scene.name}</p>
+                <p className="mt-0.5 font-mono-num text-[10.5px] text-slate-400">
+                  解析度 {scene.imageWidth} × {scene.imageHeight} px
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+              <div>
+                <label className="text-[10px] text-slate-400">空間實測坪數（坪）</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min={1}
+                  max={60}
+                  value={scene.areaPing}
+                  onChange={(e) =>
+                    dispatch({
+                      type: 'UPDATE_SCENE_INFO',
+                      patch: { areaPing: Math.max(1, Number(e.target.value) || 5) },
+                    })
+                  }
+                  className="mt-0.5 w-full rounded border border-[#2B313C] bg-[#0F1216] px-2 py-1 font-mono-num text-xs text-slate-100 focus:border-[#C89F72] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-400">樓高參考 (cm)</label>
+                <input
+                  type="number"
+                  min={200}
+                  max={450}
+                  value={scene.roomDimensionsCm.height}
+                  onChange={(e) =>
+                    dispatch({
+                      type: 'UPDATE_SCENE_INFO',
+                      patch: { heightCm: Math.max(200, Number(e.target.value) || 280) },
+                    })
+                  }
+                  className="mt-0.5 w-full rounded border border-[#2B313C] bg-[#0F1216] px-2 py-1 font-mono-num text-xs text-slate-100 focus:border-[#C89F72] focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </section>
 
-      {/* 2. Module 5: Spatial Scale Calibration */}
+      {/* 功能 2｜空間尺度校準（Pixel-to-CM） */}
       <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-            功能 5｜空間尺度校準（Pixel-to-CM）
+            功能 2｜空間尺度校準（Pixel-to-CM）
           </h3>
           <span
             className={`rounded-full px-2 py-0.5 font-mono-num text-[10px] font-semibold ${
@@ -177,12 +269,13 @@ export const Step1ImportCalibratePanel: React.FC = () => {
                 },
               })
             }
-            className="w-24 rounded border border-[#2B313C] bg-[#111419] px-2 py-1 font-mono-num text-xs text-slate-100 focus:border-[#C89F72] focus:outline-none"
+            className="w-20 sm:w-24 rounded border border-[#2B313C] bg-[#111419] px-2 py-1 font-mono-num text-xs text-slate-100 focus:border-[#C89F72] focus:outline-none"
           />
           <button
             type="button"
+            disabled={!hasPhoto}
             onClick={() => setActiveTool(activeTool === 'ruler' ? 'select' : 'ruler')}
-            className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition cursor-pointer ${
+            className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
               activeTool === 'ruler'
                 ? 'bg-amber-400 text-slate-950 shadow'
                 : 'border border-amber-400/40 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20'
@@ -260,21 +353,25 @@ export const Step1ImportCalibratePanel: React.FC = () => {
         </div>
       </section>
 
-      {/* 3. Module 7: Structural & MEP Protection Mask */}
+      {/* 功能 3｜不可更動結構與機電點位鎖定 */}
       <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5">
-        <div className="mb-2 flex items-center justify-between">
+        <div className="mb-2 flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-            功能 7｜不可更動結構與機電點位鎖定
+            功能 3｜不可更動結構與機電點位鎖定
           </h3>
           <button
             type="button"
+            disabled={!hasPhoto}
             onClick={() =>
               dispatch({
                 type: 'AUTO_DETECT_PROTECTION_ZONES',
-                zones: scene.defaultProtectionZones,
+                zones:
+                  scene.defaultProtectionZones.length > 0
+                    ? scene.defaultProtectionZones
+                    : HEURISTIC_PROTECTION_ZONES,
               })
             }
-            className="flex items-center gap-1 rounded bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-300 border border-sky-500/30 hover:bg-sky-500/25 cursor-pointer"
+            className="flex items-center gap-1 shrink-0 rounded bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-300 border border-sky-500/30 hover:bg-sky-500/25 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             <Sparkles className="h-3 w-3" />
             VLM 自動辨識
@@ -303,8 +400,9 @@ export const Step1ImportCalibratePanel: React.FC = () => {
         <div className="mb-2.5 grid grid-cols-2 gap-2">
           <button
             type="button"
+            disabled={!hasPhoto}
             onClick={() => setActiveTool(activeTool === 'brush_mask' ? 'select' : 'brush_mask')}
-            className={`flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs font-medium transition cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs font-medium transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
               activeTool === 'brush_mask'
                 ? 'border-rose-400 bg-rose-500/20 text-rose-200'
                 : 'border-[#2B313C] bg-[#13161B] text-slate-300 hover:bg-[#1E232B]'
@@ -315,10 +413,11 @@ export const Step1ImportCalibratePanel: React.FC = () => {
           </button>
           <button
             type="button"
+            disabled={!hasPhoto}
             onClick={() =>
               setActiveTool(activeTool === 'polygon_mask' ? 'select' : 'polygon_mask')
             }
-            className={`flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs font-medium transition cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs font-medium transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${
               activeTool === 'polygon_mask'
                 ? 'border-rose-400 bg-rose-500/20 text-rose-200'
                 : 'border-[#2B313C] bg-[#13161B] text-slate-300 hover:bg-[#1E232B]'
@@ -347,7 +446,9 @@ export const Step1ImportCalibratePanel: React.FC = () => {
         <div className="max-h-40 space-y-1.5 overflow-y-auto pr-1">
           {protectionZones.length === 0 && (
             <p className="rounded border border-dashed border-[#2D3440] p-2.5 text-center text-[11px] text-slate-500">
-              尚未標記保護遮罩，請使用筆刷或多邊形工具標出窗戶、冷氣與配電箱。
+              {hasPhoto
+                ? '尚未標記保護遮罩，請點擊「VLM 自動辨識」或使用筆刷／多邊形工具標出窗戶、冷氣與配電箱。'
+                : '請先於「功能 1」匯入空間照片，即可標記或自動辨識機電結構鎖定區域。'}
             </p>
           )}
           {protectionZones.map((zone) => (
@@ -391,7 +492,7 @@ export const Step1ImportCalibratePanel: React.FC = () => {
         }}
         className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] shadow hover:bg-[#D8B084] transition cursor-pointer"
       >
-        完成空間校準，前往步驟二：模式與需求設定
+        前往步驟二：設計模式與客製需求（功能 4～7）
         <ArrowRight className="h-4 w-4" />
       </button>
     </div>

@@ -83,14 +83,14 @@ export const FloorPlan2DView: React.FC = () => {
   const selectedItem = furniture.find((f) => f.id === selectedFurnitureId);
 
   return (
-    <div className="relative flex h-full w-full flex-col items-center justify-center bg-[#101318] p-4 select-none">
+    <div className="relative flex h-full w-full flex-col items-center justify-center bg-[#101318] p-2 sm:p-4 select-none">
       {/* Top 2D CAD Action Hint */}
-      <div className="mb-2 flex w-full max-w-4xl items-center justify-between text-xs text-slate-400">
-        <div className="flex items-center gap-3">
+      <div className="mb-1.5 sm:mb-2 flex w-full max-w-4xl flex-wrap items-center justify-between gap-1.5 text-[10px] sm:text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <span className="rounded bg-[#1D222B] px-2 py-0.5 font-mono-num text-[#DFBA8C] border border-[#2D3442]">
-            2D 俯視平面配置圖（比例 1:{Math.round(roomW / 10)}）
+            2D 平面（1:{Math.round(roomW / 10)}）
           </span>
-          <span>拖曳家具方塊即可即時重新檢測走道淨寬與門片干涉</span>
+          <span className="hidden sm:inline">拖曳家具方塊即可即時重新檢測走道淨寬與門片干涉</span>
         </div>
         {selectedItem && (
           <button
@@ -104,9 +104,9 @@ export const FloorPlan2DView: React.FC = () => {
                 rotationDeg: (selectedItem.topDownPosCm.rotationDeg + 90) % 360,
               })
             }
-            className="flex items-center gap-1.5 rounded bg-[#C89F72]/15 px-2.5 py-1 text-xs font-medium text-[#E2BE96] border border-[#C89F72]/40 hover:bg-[#C89F72]/25 transition cursor-pointer"
+            className="flex items-center gap-1 rounded bg-[#C89F72]/15 px-2 py-0.5 sm:py-1 text-[10.5px] sm:text-xs font-medium text-[#E2BE96] border border-[#C89F72]/40 hover:bg-[#C89F72]/25 transition cursor-pointer"
           >
-            <RotateCw className="h-3.5 w-3.5" />
+            <RotateCw className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
             旋轉「{selectedItem.name}」90°
           </button>
         )}
@@ -115,7 +115,8 @@ export const FloorPlan2DView: React.FC = () => {
       <svg
         ref={svgRef}
         viewBox={`${-padding} ${-padding} ${roomW + padding * 2} ${roomD + padding * 2}`}
-        className="h-full max-h-[600px] w-full max-w-4xl rounded-lg border border-[#272D38] bg-[#14181F] shadow-inner"
+        style={{ touchAction: 'none' }}
+        className="min-h-0 flex-1 w-full max-w-4xl lg:max-h-[600px] rounded-lg border border-[#272D38] bg-[#14181F] shadow-inner"
         onPointerMove={(e) => {
           if (!dragState) return;
           const pt = clientToCm(e.clientX, e.clientY);

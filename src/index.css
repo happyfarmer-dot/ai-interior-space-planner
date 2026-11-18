@@ -16,10 +16,33 @@
   html,
   body,
   #root {
-    height: 100%;
+    min-height: 100dvh;
     font-family: var(--font-sans);
     background-color: var(--surface-base);
     color: #e6e8eb;
+  }
+
+  @media (max-width: 1023px) {
+    html {
+      height: auto;
+      overflow-y: auto;
+      overflow-x: clip;
+    }
+
+    body,
+    #root {
+      height: auto;
+      overflow: visible;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    html,
+    body,
+    #root {
+      height: 100%;
+      overflow: hidden;
+    }
   }
 }
 
@@ -87,13 +110,27 @@ input[type='range'].cad-slider::-webkit-slider-thumb:hover {
 
 /* Print / Export PDF Styling */
 @media print {
-  body {
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
     background: #ffffff !important;
     color: #111827 !important;
   }
 
   .no-print {
     display: none !important;
+  }
+
+  .print-modal-backdrop {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: transparent !important;
+    padding: 0 !important;
   }
 
   .print-only-container {

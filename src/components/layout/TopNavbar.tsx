@@ -13,11 +13,11 @@ import { getAIServiceConfig } from '../../services/aiConfig';
 import { useDesignStore } from '../../store/useDesignStore';
 import type { WorkflowStep } from '../../types/design';
 
-const STEPS: Array<{ step: WorkflowStep; label: string }> = [
-  { step: 1, label: '1. 匯入與校準' },
-  { step: 2, label: '2. 模式與需求' },
-  { step: 3, label: '3. 生成與檢測' },
-  { step: 4, label: '4. 清單與匯出' },
+const STEPS: Array<{ step: WorkflowStep; label: string; shortLabel: string }> = [
+  { step: 1, label: '1. 空間與校準', shortLabel: '1. 空間校準' },
+  { step: 2, label: '2. 模式與需求', shortLabel: '2. 設計模式' },
+  { step: 3, label: '3. 檢測與微調', shortLabel: '3. 檢測微調' },
+  { step: 4, label: '4. 採購與輸出', shortLabel: '4. 預算輸出' },
 ];
 
 interface TopNavbarProps {
@@ -39,22 +39,25 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   const canRedo = state.redoStack.length > 0;
 
   return (
-    <header className="no-print flex h-14 shrink-0 items-center justify-between border-b border-[#232832] bg-[#14171C] px-4 gap-3">
+    <header className="no-print flex w-full shrink-0 flex-wrap sm:flex-nowrap items-center justify-between gap-x-2 gap-y-1.5 sm:gap-3 border-b border-[#232832] bg-[#14171C] px-2.5 sm:px-4 py-1.5 sm:py-0 sm:h-14">
       {/* Brand Title */}
-      <div className="flex items-center gap-2.5 shrink-0">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#C89F72]/50 bg-[#C89F72]/15 text-[#DFBA8C]">
+      <div className="order-1 flex items-center gap-2 sm:gap-2.5 min-w-0 shrink-0">
+        <div className="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-lg border border-[#C89F72]/50 bg-[#C89F72]/15 text-[#DFBA8C]">
           <Compass className="h-4 w-4" />
         </div>
-        <div className="leading-tight">
-          <h1 className="text-sm font-bold tracking-tight text-slate-100">
-            空間智繪 <span className="font-medium text-[#C89F72]">SpatialMind AI</span>
+        <div className="leading-tight min-w-0">
+          <h1 className="text-xs sm:text-sm font-bold tracking-tight text-slate-100 truncate">
+            空間智繪 <span className="hidden sm:inline font-medium text-[#C89F72]">SpatialMind AI</span>
           </h1>
-          <p className="text-[10px] text-slate-400">物理邏輯 × 商業預算 室內空間輔助系統</p>
+          <p className="hidden sm:block text-[10px] text-slate-400">物理邏輯 × 商業預算 室內空間輔助系統</p>
         </div>
       </div>
 
-      {/* 4-Step Workflow Stepper */}
-      <nav aria-label="設計流程步驟" className="hidden xl:flex items-center gap-1 rounded-xl border border-[#272D38] bg-[#0F1216] p-1">
+      {/* 4-Step Workflow Stepper (Desktop XL+) */}
+      <nav
+        aria-label="設計流程步驟"
+        className="order-2 hidden xl:flex items-center gap-1 rounded-xl border border-[#272D38] bg-[#0F1216] p-1"
+      >
         {STEPS.map((item, idx) => {
           const active = currentStep === item.step;
           const completed = currentStep > item.step;
@@ -81,32 +84,36 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         })}
       </nav>
 
-      {/* Compact Stepper for narrower viewports */}
-      <div className="flex xl:hidden items-center gap-1">
-        {STEPS.map((item) => (
-          <button
-            key={item.step}
-            type="button"
-            onClick={() => dispatch({ type: 'SET_STEP', step: item.step })}
-            className={`rounded px-2 py-1 text-xs font-semibold cursor-pointer ${
-              currentStep === item.step
-                ? 'bg-[#C89F72] text-[#111315]'
-                : 'bg-[#1D222A] text-slate-400'
-            }`}
-          >
-            S{item.step}
-          </button>
-        ))}
+      {/* Compact Stepper for Tablet/Mobile (wraps cleanly on < 640px, single row on sm..lg) */}
+      <div className="order-3 sm:order-2 grid w-full grid-cols-4 gap-1 sm:flex sm:w-auto sm:items-center sm:gap-1 xl:hidden">
+        {STEPS.map((item) => {
+          const active = currentStep === item.step;
+          return (
+            <button
+              key={item.step}
+              type="button"
+              onClick={() => dispatch({ type: 'SET_STEP', step: item.step })}
+              className={`rounded-md px-1 sm:px-2 py-1 text-[10.5px] sm:text-xs font-semibold text-center truncate cursor-pointer transition ${
+                active
+                  ? 'bg-[#C89F72] text-[#111315] font-bold'
+                  : 'bg-[#1D222A] text-slate-300 hover:text-white'
+              }`}
+            >
+              <span className="sm:hidden">{item.shortLabel}</span>
+              <span className="hidden sm:inline">S{item.step}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Right Tools: Undo/Redo, Snapshots, API Architecture, Export */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="order-2 sm:order-3 flex items-center gap-1 sm:gap-1.5 shrink-0">
         <div className="flex items-center rounded-lg border border-[#272D38] bg-[#191D24] p-0.5">
           <button
             type="button"
             disabled={!canUndo}
             onClick={() => dispatch({ type: 'UNDO' })}
-            className="rounded p-1.5 text-slate-300 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            className="rounded p-1 sm:p-1.5 text-slate-300 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
             title="復原上一步 (Ctrl+Z)"
           >
             <Undo2 className="h-3.5 w-3.5" />
@@ -115,7 +122,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
             type="button"
             disabled={!canRedo}
             onClick={() => dispatch({ type: 'REDO' })}
-            className="rounded p-1.5 text-slate-300 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+            className="rounded p-1 sm:p-1.5 text-slate-300 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
             title="重做下一步 (Ctrl+Y)"
           >
             <Redo2 className="h-3.5 w-3.5" />
@@ -123,7 +130,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           <button
             type="button"
             onClick={() => dispatch({ type: 'RESET_ALL_EDITS' })}
-            className="rounded p-1.5 text-slate-400 hover:bg-white/5 hover:text-amber-300 cursor-pointer"
+            className="rounded p-1 sm:p-1.5 text-slate-400 hover:bg-white/5 hover:text-amber-300 cursor-pointer"
             title="重設所有修改回到現況圖"
           >
             <RotateCcw className="h-3.5 w-3.5" />
@@ -149,7 +156,8 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         <button
           type="button"
           onClick={onOpenHistory}
-          className="flex items-center gap-1 rounded-lg border border-[#272D38] bg-[#191D24] px-2.5 py-1.5 text-xs text-slate-200 hover:border-slate-500 transition cursor-pointer"
+          className="flex items-center gap-1 rounded-lg border border-[#272D38] bg-[#191D24] px-2 sm:px-2.5 py-1 sm:py-1.5 text-xs text-slate-200 hover:border-slate-500 transition cursor-pointer"
+          title="歷史版本快照"
         >
           <History className="h-3.5 w-3.5 text-sky-400" />
           <span className="hidden md:inline">版本</span>
@@ -171,9 +179,11 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         <button
           type="button"
           onClick={onOpenProposalPdf}
-          className="flex items-center gap-1.5 rounded-lg bg-[#C89F72] px-3 py-1.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+          className="flex items-center gap-1 rounded-lg bg-[#C89F72] px-2 sm:px-3 py-1 sm:py-1.5 text-[11px] sm:text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+          title="預覽與匯出企劃書"
         >
           <FileText className="h-3.5 w-3.5" />
+          <span className="sm:hidden">企劃書</span>
           <span className="hidden sm:inline">匯出企劃書</span>
         </button>
       </div>

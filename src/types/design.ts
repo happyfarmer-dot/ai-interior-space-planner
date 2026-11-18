@@ -346,6 +346,7 @@ export interface BomLineItem {
   unitPriceNote: string;
   minTotalTWD: number;
   maxTotalTWD: number;
+  budgetSharePct: number;
 }
 
 export interface BomReport {

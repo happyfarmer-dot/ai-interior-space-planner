@@ -344,6 +344,35 @@ export async function renderCompositeRoomCanvas(
     rearrangeProposalActive = false,
   } = params;
 
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  if (!scene.imageUrl) {
+    const w = scene.imageWidth || 1280;
+    const h = scene.imageHeight || 720;
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    ctx.fillStyle = '#0F1319';
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < w; x += 48) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+    for (let y = 0; y < h; y += 48) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+    return;
+  }
+
   const baseImg = await loadImageCached(scene.imageUrl);
   const w = baseImg.naturalWidth || scene.imageWidth;
   const h = baseImg.naturalHeight || scene.imageHeight;
@@ -352,9 +381,6 @@ export async function renderCompositeRoomCanvas(
     canvas.width = w;
     canvas.height = h;
   }
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
 
   ctx.clearRect(0, 0, w, h);
 

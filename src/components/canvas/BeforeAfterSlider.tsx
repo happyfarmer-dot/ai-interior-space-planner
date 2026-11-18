@@ -26,6 +26,7 @@ export const BeforeAfterSlider: React.FC<{ width: number; height: number }> = ({
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
+    if (!scene.imageUrl) return;
     if (beforeCanvasRef.current) {
       renderCompositeRoomCanvas(beforeCanvasRef.current, {
         scene,
@@ -59,11 +60,24 @@ export const BeforeAfterSlider: React.FC<{ width: number; height: number }> = ({
     setSplitPercent(Math.max(4, Math.min(96, pct)));
   };
 
+  if (!scene.imageUrl) {
+    return (
+      <div
+        className="flex items-center justify-center rounded border border-dashed border-[#2F3643] bg-[#13171D] p-4 text-center text-xs text-slate-400"
+        style={{ width, height }}
+      >
+        請先於「功能 1」拍攝或上傳室內現況照片後即可進行前後滑動對比
+      </div>
+    );
+  }
+
+  const compact = width < 480;
+
   return (
     <div
       ref={containerRef}
       className="relative h-full w-full select-none overflow-hidden"
-      style={{ width, height }}
+      style={{ width, height, touchAction: 'none' }}
       onPointerMove={(e) => {
         if (dragging) {
           e.stopPropagation();
@@ -85,11 +99,21 @@ export const BeforeAfterSlider: React.FC<{ width: number; height: number }> = ({
       </div>
 
       {/* Labels */}
-      <span className="pointer-events-none absolute left-3 top-3 rounded bg-black/75 px-2.5 py-1 text-xs font-medium text-slate-200 border border-white/15 backdrop-blur-sm">
-        原始現況 BEFORE
+      <span
+        className={`pointer-events-none absolute left-2 top-2 rounded bg-black/75 border border-white/15 backdrop-blur-sm font-medium text-slate-200 ${
+          compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs'
+        }`}
+      >
+        {compact ? '原況 BEFORE' : '原始現況 BEFORE'}
       </span>
-      <span className="pointer-events-none absolute right-3 top-3 rounded bg-[#C89F72]/90 px-2.5 py-1 text-xs font-semibold text-[#111315] shadow">
-        模擬改造 AFTER ({styleConfig.applied ? `${styleConfig.intensity}% 風格` : '即時渲染'})
+      <span
+        className={`pointer-events-none absolute right-2 top-2 rounded bg-[#C89F72]/90 font-semibold text-[#111315] shadow ${
+          compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs'
+        }`}
+      >
+        {compact
+          ? '改造 AFTER'
+          : `模擬改造 AFTER (${styleConfig.applied ? `${styleConfig.intensity}% 風格` : '即時渲染'})`}
       </span>
 
       {/* Interactive Split Divider */}
@@ -105,11 +129,11 @@ export const BeforeAfterSlider: React.FC<{ width: number; height: number }> = ({
           setDragging(true);
           updateSplit(e.clientX);
         }}
-        className="absolute inset-y-0 z-20 flex w-6 -translate-x-1/2 cursor-ew-resize items-center justify-center"
-        style={{ left: `${splitPercent}%` }}
+        className="absolute inset-y-0 z-20 flex w-7 -translate-x-1/2 cursor-ew-resize items-center justify-center"
+        style={{ left: `${splitPercent}%`, touchAction: 'none' }}
       >
         <div className="h-full w-0.5 bg-[#E2BE96] shadow-[0_0_8px_rgba(0,0,0,0.75)]" />
-        <div className="absolute flex h-9 w-9 items-center justify-center rounded-full border-2 border-[#E2BE96] bg-[#16191E] text-[#E2BE96] shadow-lg transition hover:scale-110">
+        <div className="absolute flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full border-2 border-[#E2BE96] bg-[#16191E] text-[#E2BE96] shadow-lg transition hover:scale-110">
           <MoveHorizontal className="h-4 w-4" />
         </div>
       </div>

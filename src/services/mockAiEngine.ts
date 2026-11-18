@@ -210,15 +210,15 @@ export function generateRearrangementProposalsMock(
 
   // Living Room (and generic uploaded room) 3 Distinct Rearrangement Proposals
   const layout1 = cloneWithUpdates({
-    'furn-sofa-orig': {
+    sofa: {
       topDownPosCm: { x: 286, y: 120, rotationDeg: 90 },
       imagePos: { x: 0.74, y: 0.82, scale: 1 },
     },
-    'furn-ct-orig': {
+    coffee_table: {
       topDownPosCm: { x: 192, y: 178, rotationDeg: 90 },
       imagePos: { x: 0.56, y: 0.82, scale: 1 },
     },
-    'furn-tv-orig': {
+    tv_console: {
       topDownPosCm: { x: 14, y: 155, rotationDeg: 90 },
       imagePos: { x: 0.36, y: 0.72, scale: 1 },
     },
@@ -226,15 +226,15 @@ export function generateRearrangementProposalsMock(
 
   const layout2 = cloneWithUpdates(
     {
-      'furn-sofa-orig': {
+      sofa: {
         topDownPosCm: { x: 105, y: 14, rotationDeg: 0 },
-        imagePos: { x: 0.50, y: 0.70, scale: 0.92 },
+        imagePos: { x: 0.5, y: 0.7, scale: 0.92 },
       },
-      'furn-ct-orig': {
+      coffee_table: {
         topDownPosCm: { x: 155, y: 148, rotationDeg: 0 },
-        imagePos: { x: 0.50, y: 0.80, scale: 0.95 },
+        imagePos: { x: 0.5, y: 0.8, scale: 0.95 },
       },
-      'furn-tv-orig': {
+      tv_console: {
         topDownPosCm: { x: 130, y: 405, rotationDeg: 0 },
         imagePos: { x: 0.48, y: 0.93, scale: 1.05 },
       },
@@ -263,15 +263,15 @@ export function generateRearrangementProposalsMock(
 
   const layout3 = cloneWithUpdates(
     {
-      'furn-sofa-orig': {
+      sofa: {
         topDownPosCm: { x: 75, y: 125, rotationDeg: 90 },
-        imagePos: { x: 0.40, y: 0.78, scale: 0.96 },
+        imagePos: { x: 0.4, y: 0.78, scale: 0.96 },
       },
-      'furn-ct-orig': {
+      coffee_table: {
         topDownPosCm: { x: 205, y: 185, rotationDeg: 90 },
         imagePos: { x: 0.58, y: 0.83, scale: 1 },
       },
-      'furn-tv-orig': {
+      tv_console: {
         topDownPosCm: { x: 326, y: 150, rotationDeg: 90 },
         imagePos: { x: 0.76, y: 0.78, scale: 1 },
       },

@@ -205,14 +205,20 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
   const showMaterialZones =
     activeTool === 'material_pick' || (currentStep === 3 && materials.activeTarget !== null);
 
+  if (!scene.imageUrl) {
+    return null;
+  }
+
+  const interactiveDrawingTool =
+    activeTool === 'ruler' || activeTool === 'brush_mask' || activeTool === 'polygon_mask';
+
   return (
     <svg
       ref={svgRef}
       viewBox={`0 0 ${width} ${height}`}
+      style={{ touchAction: interactiveDrawingTool ? 'none' : 'auto' }}
       className={`absolute inset-0 h-full w-full ${
-        activeTool === 'ruler' || activeTool === 'brush_mask' || activeTool === 'polygon_mask'
-          ? 'cursor-crosshair pointer-events-auto'
-          : 'pointer-events-auto'
+        interactiveDrawingTool ? 'cursor-crosshair pointer-events-auto' : 'pointer-events-auto'
       }`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -571,14 +577,17 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
           );
         })}
 
-      {/* 7. Module 6: Perspective Ergonomics Summary Pill */}
+      {/* 7. Feature 8: Perspective Ergonomics Summary Pill */}
       {showErgonomicsOverlay && currentStep >= 3 && (
-        <g pointerEvents="none" transform={`translate(18, ${height - 46})`}>
+        <g
+          pointerEvents="none"
+          transform={`translate(10, ${Math.max(8, height - (width < 460 ? 32 : 46))})`}
+        >
           <rect
             x={0}
             y={0}
-            width={340}
-            height={30}
+            width={Math.min(width - 20, 340)}
+            height={width < 460 ? 24 : 30}
             rx={6}
             fill="rgba(14, 16, 19, 0.88)"
             stroke={
@@ -590,9 +599,9 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
             }
           />
           <circle
-            cx={16}
-            cy={15}
-            r={5}
+            cx={12}
+            cy={width < 460 ? 12 : 15}
+            r={width < 460 ? 4 : 5}
             fill={
               ergonomics.walkwayStatus === 'green'
                 ? '#34D399'
@@ -601,7 +610,14 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
                 : '#EF4444'
             }
           />
-          <text x={28} y={19} fill="#F1F5F9" fontSize="12" fontWeight="600" fontFamily="JetBrains Mono">
+          <text
+            x={22}
+            y={width < 460 ? 15.5 : 19}
+            fill="#F1F5F9"
+            fontSize={width < 460 ? '10' : '12'}
+            fontWeight="600"
+            fontFamily="JetBrains Mono"
+          >
             主走道 {ergonomics.mainWalkwayCm}cm · 視聽 {ergonomics.viewingDistanceCm}cm ({ergonomics.recommendedTvInches})
           </text>
         </g>

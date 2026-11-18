@@ -1,4 +1,4 @@
-import { SAMPLE_SCENES } from '../data/sampleScenes';
+import { EMPTY_ROOM_SCENE } from '../data/sampleScenes';
 import type {
   CanvasViewMode,
   CoreDesignSnapshotState,
@@ -26,7 +26,9 @@ export interface DesignStoreState {
   snapshots: DesignVersionSnapshot[];
 }
 
-export function createInitialSnapshotState(scene: RoomScene = SAMPLE_SCENES[0]): CoreDesignSnapshotState {
+export function createInitialSnapshotState(
+  scene: RoomScene = EMPTY_ROOM_SCENE
+): CoreDesignSnapshotState {
   return {
     currentStep: 1,
     activeMode: 'style',
@@ -100,7 +102,7 @@ export function createInitialSnapshotState(scene: RoomScene = SAMPLE_SCENES[0]):
 }
 
 export function createInitialStoreState(): DesignStoreState {
-  const initialPresent = createInitialSnapshotState(SAMPLE_SCENES[0]);
+  const initialPresent = createInitialSnapshotState(EMPTY_ROOM_SCENE);
   const ergo = evaluateErgonomics(
     initialPresent.scene,
     initialPresent.furniture,
@@ -113,9 +115,9 @@ export function createInitialStoreState(): DesignStoreState {
     snapshots: [
       {
         id: 'snap-baseline',
-        name: 'v0 現況基準快照（原始未改動）',
+        name: 'v0 初始工作區（待匯入空間照片）',
         createdAt: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
-        summary: '匯入現況空間、完成尺度校準與機電結構鎖定',
+        summary: '請先於「功能 1」拍攝或上傳室內現況照片',
         ergonomicsScore: ergo.overallScore,
         estimatedMidTWD: 0,
         state: structuredClone(initialPresent),
@@ -129,6 +131,10 @@ export type DesignAction =
   | { type: 'SET_MODE'; mode: DesignMode }
   | { type: 'SET_VIEW_MODE'; viewMode: CanvasViewMode }
   | { type: 'LOAD_SCENE'; scene: RoomScene }
+  | {
+      type: 'UPDATE_SCENE_INFO';
+      patch: { name?: string; areaPing?: number; widthCm?: number; depthCm?: number; heightCm?: number };
+    }
   | { type: 'UPDATE_CALIBRATION'; patch: Partial<ScaleCalibration>; recordHistory?: boolean }
   | { type: 'ADD_PROTECTION_ZONE'; zone: ProtectionZone }
   | { type: 'TOGGLE_ZONE_LOCK'; id: string }
@@ -211,6 +217,26 @@ export function designReducer(state: DesignStoreState, action: DesignAction): De
         present: fresh,
         undoStack: [...state.undoStack, structuredClone(cur)].slice(-35),
         redoStack: [],
+      };
+    }
+
+    case 'UPDATE_SCENE_INFO': {
+      const dims = {
+        width: action.patch.widthCm ?? cur.scene.roomDimensionsCm.width,
+        depth: action.patch.depthCm ?? cur.scene.roomDimensionsCm.depth,
+        height: action.patch.heightCm ?? cur.scene.roomDimensionsCm.height,
+      };
+      return {
+        ...state,
+        present: {
+          ...cur,
+          scene: {
+            ...cur.scene,
+            name: action.patch.name ?? cur.scene.name,
+            areaPing: action.patch.areaPing ?? cur.scene.areaPing,
+            roomDimensionsCm: dims,
+          },
+        },
       };
     }
 

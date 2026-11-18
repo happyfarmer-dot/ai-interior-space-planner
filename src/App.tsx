@@ -10,27 +10,39 @@ import { DesignProvider } from './store/useDesignStore';
 
 const StudioShell: React.FC = () => {
   const [showHistory, setShowHistory] = useState(false);
-  const [showProposalPdf, setShowProposalPdf] = useState(false);
+  const [proposalModalState, setProposalModalState] = useState<{
+    open: boolean;
+    autoPrint: boolean;
+  }>({ open: false, autoPrint: false });
   const [showArchitecture, setShowArchitecture] = useState(false);
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0E1013] text-[#E6E8EB]">
+    <div className="flex min-h-[100dvh] w-full max-w-full flex-col overflow-x-clip bg-[#0E1013] text-[#E6E8EB] lg:h-screen lg:overflow-hidden">
       <TopNavbar
         onOpenHistory={() => setShowHistory(true)}
-        onOpenProposalPdf={() => setShowProposalPdf(true)}
+        onOpenProposalPdf={() => setProposalModalState({ open: true, autoPrint: false })}
         onOpenArchitecture={() => setShowArchitecture(true)}
       />
 
-      <div className="no-print flex flex-1 flex-col md:flex-row overflow-hidden">
-        <div className="flex flex-1 overflow-hidden">
-          <LeftToolRail />
-          <MainCanvasViewport />
-        </div>
-        <RightInspector onOpenProposalModal={() => setShowProposalPdf(true)} />
+      {/* < 1024px: vertical stacked layout allowing natural page scroll + sticky preview at top
+          >= 1024px (lg): classic desktop CAD split workspace */}
+      <div className="no-print flex min-w-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
+        <LeftToolRail />
+        <MainCanvasViewport />
+        <RightInspector
+          onOpenProposalModal={(opts) =>
+            setProposalModalState({ open: true, autoPrint: Boolean(opts?.autoPrint) })
+          }
+        />
       </div>
 
       {showHistory && <VersionHistoryModal onClose={() => setShowHistory(false)} />}
-      {showProposalPdf && <ProposalPdfModal onClose={() => setShowProposalPdf(false)} />}
+      {proposalModalState.open && (
+        <ProposalPdfModal
+          autoPrintOnOpen={proposalModalState.autoPrint}
+          onClose={() => setProposalModalState({ open: false, autoPrint: false })}
+        />
+      )}
       {showArchitecture && <ArchitectureInfoModal onClose={() => setShowArchitecture(false)} />}
     </div>
   );

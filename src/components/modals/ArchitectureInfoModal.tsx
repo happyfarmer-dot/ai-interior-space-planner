@@ -33,7 +33,7 @@ export const ArchitectureInfoModal: React.FC<{ onClose: () => void }> = ({ onClo
               </div>
               <pre className="font-mono-num text-[10.5px] leading-relaxed text-slate-300 overflow-x-auto">
 {`src/
-├── types/design.ts           # 11大模組型別契約
+├── types/design.ts           # 13大空間設計功能契約
 ├── data/                     # 風格庫/材質庫/台灣家居規格庫
 ├── services/
 │   ├── aiConfig.ts           # 環境變數與模式讀取
@@ -41,11 +41,12 @@ export const ArchitectureInfoModal: React.FC<{ onClose: () => void }> = ({ onClo
 │   └── mockAiEngine.ts       # 離線互動演算與完整模擬
 ├── store/
 │   ├── reducer.ts            # 不可變狀態機 + Undo/Redo + 快照
-│   └── useDesignStore.ts     # Context & 即時工學/BOM推導
+│   └── useDesignStore.tsx    # Context & 即時工學/BOM推導
 ├── utils/
 │   ├── geometry.ts           # 比例尺、門扇碰撞與距離幾何
 │   ├── ergonomics.ts         # 紅黃綠燈人體工學檢測
 │   ├── bomCalculator.ts      # 台灣行情 BOM 估算引擎
+│   ├── exportUtils.ts        # UTF-8 BOM CSV / LINE 明細匯出
 │   └── imageProcessing.ts    # 去背演算法與 Canvas 光影合成
 └── components/               # 畫布圖層、四步驟面板與報表`}
               </pre>

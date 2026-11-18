@@ -53,6 +53,7 @@ export const Step3RefineInspectPanel: React.FC = () => {
   } = useDesignStore();
 
   const {
+    scene,
     proposals,
     selectedProposalId,
     styleConfig,
@@ -62,23 +63,25 @@ export const Step3RefineInspectPanel: React.FC = () => {
     customPrompt,
   } = state.present;
 
+  const hasPhoto = Boolean(scene.imageUrl);
   const activeTarget: SurfaceTarget = materials.activeTarget ?? 'floor';
   const surfaceMaterials = getMaterialsByTarget(activeTarget);
 
   return (
     <div className="space-y-4">
-      {/* Proposals switcher (Module 1) */}
+      {/* Contextual Rearrangement Proposal Switcher (if triggered from 功能 4) */}
       {(proposals.length > 0 || activeMode === 'rearrange') && (
         <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2.5">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-              功能 1｜AI 配置提案比較與調整理由
+              配置提案比較（源自功能 4）
             </h3>
             {proposals.length === 0 && (
               <button
                 type="button"
+                disabled={!hasPhoto}
                 onClick={runGenerateProposals}
-                className="rounded bg-[#C89F72]/20 px-2 py-0.5 text-[11px] font-medium text-[#E2BE96] cursor-pointer"
+                className="rounded bg-[#C89F72]/20 px-2 py-0.5 text-[11px] font-medium text-[#E2BE96] disabled:opacity-40 cursor-pointer"
               >
                 立即生成方案
               </button>
@@ -122,12 +125,12 @@ export const Step3RefineInspectPanel: React.FC = () => {
         </section>
       )}
 
-      {/* Quick Style Intensity & Before/After Toggle */}
+      {/* Contextual Style Intensity & Before/After Toggle (源自功能 5) */}
       {styleConfig.applied && (
         <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-[#DFBA8C]">
-              風格渲染：{STYLES_CATALOG.find((s) => s.id === styleConfig.selectedStyleId)?.nameZh}
+              風格微調（功能 5）：{STYLES_CATALOG.find((s) => s.id === styleConfig.selectedStyleId)?.nameZh}
             </span>
             <button
               type="button"
@@ -161,11 +164,11 @@ export const Step3RefineInspectPanel: React.FC = () => {
         </section>
       )}
 
-      {/* Module 6: Traffic Flow & Ergonomics Check */}
+      {/* 功能 8｜動線淨寬與人體工學自動檢測 */}
       <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2.5">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-            功能 6｜動線淨寬與人體工學自動檢測
+            功能 8｜動線淨寬與人體工學自動檢測
           </h3>
           <span className="rounded bg-[#111419] px-2 py-0.5 font-mono-num text-xs font-bold text-[#E2BE96] border border-[#2C3340]">
             綜合 {ergonomics.overallScore}/100
@@ -266,12 +269,12 @@ export const Step3RefineInspectPanel: React.FC = () => {
         </div>
       </section>
 
-      {/* Module 8: Natural Daylight & Color Temperature Simulation */}
+      {/* 功能 9｜自然採光時段與人工照明色溫模擬 */}
       <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
         <div className="flex items-center gap-1.5">
           <Sun className="h-4 w-4 text-amber-300" />
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-            功能 8｜自然採光時段與照明色溫模擬
+            功能 9｜自然採光時段與人工照明色溫模擬
           </h3>
         </div>
 
@@ -377,13 +380,13 @@ export const Step3RefineInspectPanel: React.FC = () => {
         </div>
       </section>
 
-      {/* Module 9: Local Material Inpainting */}
+      {/* 功能 10｜局部材質精準替換 */}
       <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <Paintbrush className="h-3.5 w-3.5 text-[#C89F72]" />
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-              功能 9｜局部材質精準替換（Inpaint）
+              功能 10｜局部材質精準替換
             </h3>
           </div>
           <button
@@ -487,7 +490,7 @@ export const Step3RefineInspectPanel: React.FC = () => {
         }}
         className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] shadow hover:bg-[#D8B084] transition cursor-pointer"
       >
-        前往步驟四：生成以圖搜物清單與 BOM 預算表
+        前往步驟四：採購清單與預算一鍵輸出（功能 11～13）
         <ArrowRight className="h-4 w-4" />
       </button>
     </div>

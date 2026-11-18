@@ -54,6 +54,7 @@ export function calculateBomReport(params: {
         unitPriceNote: `NT$ ${mat.priceMinPerUnit.toLocaleString()}–${mat.priceMaxPerUnit.toLocaleString()} / 坪`,
         minTotalTWD: Math.round(floorPing * mat.priceMinPerUnit),
         maxTotalTWD: Math.round(floorPing * mat.priceMaxPerUnit),
+        budgetSharePct: 0,
       });
     }
   }
@@ -70,6 +71,7 @@ export function calculateBomReport(params: {
         unitPriceNote: `NT$ ${mat.priceMinPerUnit.toLocaleString()}–${mat.priceMaxPerUnit.toLocaleString()} / 坪`,
         minTotalTWD: Math.round(wallPaintPing * mat.priceMinPerUnit),
         maxTotalTWD: Math.round(wallPaintPing * mat.priceMaxPerUnit),
+        budgetSharePct: 0,
       });
     }
   }
@@ -86,6 +88,7 @@ export function calculateBomReport(params: {
         unitPriceNote: `NT$ ${mat.priceMinPerUnit.toLocaleString()}–${mat.priceMaxPerUnit.toLocaleString()} / 窗`,
         minTotalTWD: mat.priceMinPerUnit,
         maxTotalTWD: mat.priceMaxPerUnit,
+        budgetSharePct: 0,
       });
     }
   }
@@ -102,11 +105,12 @@ export function calculateBomReport(params: {
         unitPriceNote: `NT$ ${mat.priceMinPerUnit.toLocaleString()}–${mat.priceMaxPerUnit.toLocaleString()} / 組`,
         minTotalTWD: mat.priceMinPerUnit,
         maxTotalTWD: mat.priceMaxPerUnit,
+        budgetSharePct: 0,
       });
     }
   }
 
-  // Lighting modifications (Feature 8)
+  // Lighting modifications (Feature 9)
   if (lighting.recessedDownlights) {
     items.push({
       id: 'bom-lighting-downlight',
@@ -117,6 +121,7 @@ export function calculateBomReport(params: {
       unitPriceNote: 'NT$ 1,200–1,800 / 盞',
       minTotalTWD: 7200,
       maxTotalTWD: 10800,
+      budgetSharePct: 0,
     });
   }
 
@@ -130,6 +135,7 @@ export function calculateBomReport(params: {
       unitPriceNote: 'NT$ 850–1,350 / 公尺',
       minTotalTWD: 6800,
       maxTotalTWD: 10800,
+      budgetSharePct: 0,
     });
   }
 
@@ -148,6 +154,7 @@ export function calculateBomReport(params: {
       unitPriceNote: `預估市價約 NT$ ${basePrice.toLocaleString()}`,
       minTotalTWD: minP,
       maxTotalTWD: maxP,
+      budgetSharePct: 0,
     });
   }
 
@@ -162,6 +169,7 @@ export function calculateBomReport(params: {
       unitPriceNote: 'NT$ 8,500–15,000 / 式',
       minTotalTWD: 8500,
       maxTotalTWD: 15000,
+      budgetSharePct: 0,
     });
   }
 
@@ -179,6 +187,7 @@ export function calculateBomReport(params: {
       unitPriceNote: 'NT$ 9,000–14,000 / 式',
       minTotalTWD: 9000,
       maxTotalTWD: 14000,
+      budgetSharePct: 0,
     });
   }
 
@@ -197,11 +206,21 @@ export function calculateBomReport(params: {
 
   const grandMinTWD = surfaceMinTWD + softMinTWD;
   const grandMaxTWD = surfaceMaxTWD + softMaxTWD;
+  const grandMidTWD = (grandMinTWD + grandMaxTWD) / 2;
+
+  const itemsWithShare: BomLineItem[] = items.map((item) => {
+    const itemMid = (item.minTotalTWD + item.maxTotalTWD) / 2;
+    return {
+      ...item,
+      budgetSharePct: grandMidTWD > 0 ? Number(((itemMid / grandMidTWD) * 100).toFixed(1)) : 0,
+    };
+  });
+
   const budgetCapTWD = customPrompt.parsedJson.maxBudgetTWD;
   const overBudget = budgetCapTWD !== null && grandMinTWD > budgetCapTWD;
 
   return {
-    items,
+    items: itemsWithShare,
     surfaceMinTWD,
     surfaceMaxTWD,
     softMinTWD,

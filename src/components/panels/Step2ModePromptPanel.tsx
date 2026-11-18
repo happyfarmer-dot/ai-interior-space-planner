@@ -35,10 +35,11 @@ export const Step2ModePromptPanel: React.FC = () => {
     runPrepareNewObject,
   } = useDesignStore();
 
-  const { activeMode, furniture, styleConfig, newObject, customPrompt } = state.present;
+  const { scene, activeMode, furniture, styleConfig, newObject, customPrompt } = state.present;
   const [localText, setLocalText] = useState(customPrompt.freeText);
   const [localTags, setLocalTags] = useState<string[]>(customPrompt.selectedTags);
   const itemFileRef = useRef<HTMLInputElement | null>(null);
+  const hasPhoto = Boolean(scene.imageUrl);
 
   const toggleTag = (tag: string) => {
     const next = localTags.includes(tag)
@@ -66,14 +67,19 @@ export const Step2ModePromptPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      {/* Mode Selector Tabs (Module 1 / 2 / 3) */}
+      {/* Mode Selector Tabs (功能 4 / 功能 5 / 功能 6) */}
       <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-[#282E39] bg-[#14171C] p-1">
         {(
           [
-            { id: 'rearrange', label: '傢俱智慧重排', sub: '功能 1', icon: LayoutTemplate },
-            { id: 'style', label: '全室換風格', sub: '功能 2', icon: Palette },
-            { id: 'place_object', label: '置入新物件', sub: '功能 3', icon: Box },
-          ] as Array<{ id: DesignMode; label: string; sub: string; icon: React.ComponentType<{ className?: string }> }>
+            { id: 'rearrange', label: '傢俱智慧重排', sub: '功能 4', icon: LayoutTemplate },
+            { id: 'style', label: '多元風格轉換', sub: '功能 5', icon: Palette },
+            { id: 'place_object', label: '新增物件合成', sub: '功能 6', icon: Box },
+          ] as Array<{
+            id: DesignMode;
+            label: string;
+            sub: string;
+            icon: React.ComponentType<{ className?: string }>;
+          }>
         ).map((m) => {
           const Icon = m.icon;
           const active = activeMode === m.id;
@@ -98,15 +104,15 @@ export const Step2ModePromptPanel: React.FC = () => {
         })}
       </div>
 
-      {/* Mode 1: Smart Furniture Rearrangement */}
+      {/* 功能 4｜現有傢俱智慧重排與空間優化 */}
       {activeMode === 'rearrange' && (
         <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
           <div>
             <h3 className="text-xs font-semibold text-[#DFBA8C]">
-              功能 1｜現有傢俱智慧重排與空間優化
+              功能 4｜現有傢俱智慧重排與空間優化
             </h3>
             <p className="mt-1 text-[11px] text-slate-400">
-              不更換現有家具，AI 依據左側採光面、自然通風軸與步驟一鎖定的機電結構遮罩，演算出 2～3 組最佳動線配置。
+              不更換現有家具，AI 依據採光面、自然通風軸與步驟一鎖定的機電結構遮罩，演算出 2～3 組最佳動線配置。
             </p>
           </div>
 
@@ -114,25 +120,32 @@ export const Step2ModePromptPanel: React.FC = () => {
             <span className="text-[11px] font-medium text-slate-300">
               VLM 已辨識現有家具清單（保留重排對象）：
             </span>
-            {furniture
-              .filter((f) => f.isOriginal)
-              .map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between rounded-md border border-[#272D38] bg-[#13161B] px-2.5 py-1.5 text-xs"
-                >
-                  <span className="text-slate-200">{item.name}</span>
-                  <span className="font-mono-num text-[11px] text-slate-400">
-                    {item.widthCm}×{item.depthCm}×{item.heightCm}cm
-                  </span>
-                </div>
-              ))}
+            {furniture.filter((f) => f.isOriginal).length === 0 ? (
+              <p className="rounded border border-dashed border-[#2B313C] p-2.5 text-center text-[11px] text-slate-500">
+                {hasPhoto ? '暫未偵測到可移動原始家具' : '請先於「功能 1」匯入現況空間照片'}
+              </p>
+            ) : (
+              furniture
+                .filter((f) => f.isOriginal)
+                .map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between rounded-md border border-[#272D38] bg-[#13161B] px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="text-slate-200">{item.name}</span>
+                    <span className="font-mono-num text-[11px] text-slate-400">
+                      {item.widthCm}×{item.depthCm}×{item.heightCm}cm
+                    </span>
+                  </div>
+                ))
+            )}
           </div>
 
           <button
             type="button"
+            disabled={!hasPhoto}
             onClick={runGenerateProposals}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
           >
             <Sparkles className="h-4 w-4" />
             生成 2～3 組最佳配置與 2D 平面圖
@@ -140,12 +153,12 @@ export const Step2ModePromptPanel: React.FC = () => {
         </section>
       )}
 
-      {/* Mode 2: Style Transfer & Rendering */}
+      {/* 功能 5｜多元風格轉換與模擬圖生成 */}
       {activeMode === 'style' && (
         <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
           <div>
             <h3 className="text-xs font-semibold text-[#DFBA8C]">
-              功能 2｜多元風格轉換與模擬圖生成
+              功能 5｜多元風格轉換與模擬圖生成
             </h3>
             <p className="mt-1 text-[11px] text-slate-400">
               嚴格維持原始房門、窗戶與透視結構，套用風格材質並支援「原圖／模擬圖」滑桿即時對比。
@@ -217,8 +230,9 @@ export const Step2ModePromptPanel: React.FC = () => {
 
           <button
             type="button"
+            disabled={!hasPhoto}
             onClick={runApplyStyleTransfer}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
           >
             <Sparkles className="h-4 w-4" />
             生成風格模擬圖並開啟對比滑桿
@@ -226,12 +240,12 @@ export const Step2ModePromptPanel: React.FC = () => {
         </section>
       )}
 
-      {/* Mode 3: New Object Smart Placement */}
+      {/* 功能 6｜新增物件智慧擺放與合成 */}
       {activeMode === 'place_object' && (
         <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-semibold text-[#DFBA8C]">
-              功能 3｜新增物件智慧擺放與去背合成
+              功能 6｜新增物件智慧擺放與合成
             </h3>
             <button
               type="button"
@@ -249,11 +263,12 @@ export const Step2ModePromptPanel: React.FC = () => {
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) handleUploadObjectImage(file);
+                e.target.value = '';
               }}
             />
           </div>
 
-          {/* Preset Add-on Objects */}
+          {/* Preset Add-on Furniture Items */}
           <div className="grid grid-cols-2 gap-2">
             {SAMPLE_ADDON_ITEMS.map((item) => {
               const active = newObject.sourceUrl === item.imageUrl;
@@ -388,6 +403,7 @@ export const Step2ModePromptPanel: React.FC = () => {
 
           <button
             type="button"
+            disabled={!hasPhoto || !newObject.sourceUrl}
             onClick={() => {
               if (newObject.sourceUrl) {
                 runPrepareNewObject(
@@ -400,7 +416,7 @@ export const Step2ModePromptPanel: React.FC = () => {
                 );
               }
             }}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
           >
             <Sparkles className="h-4 w-4" />
             自動去背並標示 1～3 個建議擺放高亮區
@@ -441,11 +457,11 @@ export const Step2ModePromptPanel: React.FC = () => {
         </section>
       )}
 
-      {/* Module 4: Custom Design Prompt & Structured JSON Constraints */}
+      {/* 功能 7｜客製化裝潢需求設定 */}
       <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2.5">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-            功能 4｜客製化裝潢需求解析（LLM Constraints）
+            功能 7｜客製化裝潢需求設定
           </h3>
           <Cpu className="h-3.5 w-3.5 text-sky-400" />
         </div>
@@ -501,9 +517,9 @@ export const Step2ModePromptPanel: React.FC = () => {
       <button
         type="button"
         onClick={() => dispatch({ type: 'SET_STEP', step: 3 })}
-        className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#C89F72]/60 bg-[#C89F72]/15 py-2 text-xs font-semibold text-[#E2BE96] hover:bg-[#C89F72]/25 transition cursor-pointer"
+        className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#C89F72]/60 bg-[#C89F72]/15 py-2.5 text-xs font-semibold text-[#E2BE96] hover:bg-[#C89F72]/25 transition cursor-pointer"
       >
-        前往步驟三：檢視物理檢測與光影微調
+        前往步驟三：物理檢測與光影材質微調（功能 8～10）
         <ArrowRight className="h-4 w-4" />
       </button>
     </div>
