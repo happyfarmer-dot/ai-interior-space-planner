@@ -1,7 +1,8 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useDesignStore } from '../../store/useDesignStore';
 import type { Point2D, ProtectionCategory, SurfaceTarget } from '../../types/design';
 import { computePixelPerCm, measureLineCm } from '../../utils/geometry';
+import { loadImageCached } from '../../utils/imageProcessing';
 
 const CATEGORY_STYLE: Record<
   ProtectionCategory,
@@ -21,6 +22,12 @@ const SURFACE_LABELS: Record<SurfaceTarget, string> = {
   curtain: '窗簾布料區',
 };
 
+interface LoupeState {
+  normX: number;
+  normY: number;
+  label: string;
+}
+
 export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
   width,
   height,
@@ -29,6 +36,7 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
     state,
     dispatch,
     activeTool,
+    setActiveTool,
     activeBrushCategory,
     brushSizePx,
     showProtectionOverlay,
@@ -39,6 +47,7 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
     setSelectedFurnitureId,
     ergonomics,
     runPlaceNewObjectWithAi,
+    runVisualSearch,
   } = useDesignStore();
 
   const {
@@ -49,12 +58,100 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
     currentStep,
     materials,
     scene,
+    aiRenderedImageUrl,
   } = state.present;
 
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const [rulerDrag, setRulerDrag] = useState<{ start: Point2D; end: Point2D } | null>(null);
+  const loupeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sourceImgRef = useRef<HTMLImageElement | null>(null);
+
+  const [rulerDrag, setRulerDrag] = useState<{
+    start: Point2D;
+    end: Point2D;
+    draggingEndpoint?: 'start' | 'end' | 'new';
+  } | null>(null);
   const [brushStroke, setBrushStroke] = useState<Point2D[] | null>(null);
   const [polyDraft, setPolyDraft] = useState<Point2D[]>([]);
+  const [polyDraggingIdx, setPolyDraggingIdx] = useState<number | null>(null);
+  const [polyHoverPt, setPolyHoverPt] = useState<Point2D | null>(null);
+  const [erasingActive, setErasingActive] = useState(false);
+  const [boxSelectDrag, setBoxSelectDrag] = useState<{ start: Point2D; end: Point2D } | null>(null);
+  const [loupeState, setLoupeState] = useState<LoupeState | null>(null);
+
+  // Cache current underlying image for Touch Loupe 2.5x magnification
+  const activeImgSrc = aiRenderedImageUrl || scene.imageUrl;
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeImgSrc) {
+      sourceImgRef.current = null;
+      return;
+    }
+    loadImageCached(activeImgSrc)
+      .then((img) => {
+        if (!cancelled) sourceImgRef.current = img;
+      })
+      .catch(() => {
+        if (!cancelled) sourceImgRef.current = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeImgSrc]);
+
+  // Render 2.5x magnified patch + crosshair into Loupe circular canvas
+  useEffect(() => {
+    const canvas = loupeCanvasRef.current;
+    const img = sourceImgRef.current;
+    if (!canvas || !loupeState) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const size = canvas.width;
+    const half = size / 2;
+    ctx.clearRect(0, 0, size, size);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(half, half, half - 2, 0, Math.PI * 2);
+    ctx.clip();
+
+    ctx.fillStyle = '#0E1013';
+    ctx.fillRect(0, 0, size, size);
+
+    if (img) {
+      const zoomFactor = 2.5;
+      const sampleW = (size / Math.max(1, width)) * img.naturalWidth / zoomFactor;
+      const sampleH = (size / Math.max(1, height)) * img.naturalHeight / zoomFactor;
+      const srcX = loupeState.normX * img.naturalWidth - sampleW / 2;
+      const srcY = loupeState.normY * img.naturalHeight - sampleH / 2;
+      ctx.drawImage(img, srcX, srcY, sampleW, sampleH, 0, 0, size, size);
+    }
+
+    // Subtle dark vignette border inside circle
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    // Precision crosshair at center
+    ctx.strokeStyle = '#FBBF24';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(half - 16, half);
+    ctx.lineTo(half - 4, half);
+    ctx.moveTo(half + 4, half);
+    ctx.lineTo(half + 16, half);
+    ctx.moveTo(half, half - 16);
+    ctx.lineTo(half, half - 4);
+    ctx.moveTo(half, half + 4);
+    ctx.lineTo(half, half + 16);
+    ctx.stroke();
+
+    ctx.fillStyle = '#FBBF24';
+    ctx.beginPath();
+    ctx.arc(half, half, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }, [loupeState, width, height]);
 
   const toNormPoint = (clientX: number, clientY: number): Point2D => {
     const svg = svgRef.current;
@@ -66,23 +163,88 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
     };
   };
 
+  const eraseZoneAtPoint = (pt: Point2D) => {
+    const hitRadiusPx = Math.max(22, brushSizePx * 0.75);
+    for (const zone of protectionZones) {
+      // Check vertex / stroke distance
+      const hitVertex = zone.points.some(
+        (p) => Math.hypot((p.x - pt.x) * width, (p.y - pt.y) * height) <= hitRadiusPx
+      );
+      if (hitVertex) {
+        dispatch({ type: 'REMOVE_PROTECTION_ZONE', id: zone.id });
+        return;
+      }
+      // Check bounding box for polygon zones
+      if (zone.shape === 'polygon' && zone.points.length >= 3) {
+        const xs = zone.points.map((p) => p.x);
+        const ys = zone.points.map((p) => p.y);
+        if (
+          pt.x >= Math.min(...xs) &&
+          pt.x <= Math.max(...xs) &&
+          pt.y >= Math.min(...ys) &&
+          pt.y <= Math.max(...ys)
+        ) {
+          dispatch({ type: 'REMOVE_PROTECTION_ZONE', id: zone.id });
+          return;
+        }
+      }
+    }
+  };
+
   const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore synthetic events without active pointerId
+    }
+    const pt = toNormPoint(e.clientX, e.clientY);
+
     if (activeTool === 'ruler') {
       e.stopPropagation();
-      const pt = toNormPoint(e.clientX, e.clientY);
-      setRulerDrag({ start: pt, end: pt });
+      // Check if grabbing near existing start or end endpoint
+      const distStart = Math.hypot(
+        (pt.x - calibration.lineStart.x) * width,
+        (pt.y - calibration.lineStart.y) * height
+      );
+      const distEnd = Math.hypot(
+        (pt.x - calibration.lineEnd.x) * width,
+        (pt.y - calibration.lineEnd.y) * height
+      );
+      if (distStart <= 22) {
+        setRulerDrag({
+          start: pt,
+          end: calibration.lineEnd,
+          draggingEndpoint: 'start',
+        });
+      } else if (distEnd <= 22) {
+        setRulerDrag({
+          start: calibration.lineStart,
+          end: pt,
+          draggingEndpoint: 'end',
+        });
+      } else {
+        setRulerDrag({ start: pt, end: pt, draggingEndpoint: 'new' });
+      }
+      setLoupeState({ normX: pt.x, normY: pt.y, label: '2.5x 比例尺端點對位' });
     } else if (activeTool === 'brush_mask') {
       e.stopPropagation();
-      const pt = toNormPoint(e.clientX, e.clientY);
       setBrushStroke([pt]);
+    } else if (activeTool === 'eraser') {
+      e.stopPropagation();
+      setErasingActive(true);
+      eraseZoneAtPoint(pt);
+    } else if (activeTool === 'manual_box_select') {
+      e.stopPropagation();
+      setBoxSelectDrag({ start: pt, end: pt });
     } else if (activeTool === 'polygon_mask') {
       e.stopPropagation();
-      const pt = toNormPoint(e.clientX, e.clientY);
-      // Close polygon if clicking near first vertex
+      setLoupeState({ normX: pt.x, normY: pt.y, label: '2.5x 多邊形頂點對位' });
+
+      // Close polygon if clicking near first vertex (when >= 3 vertices exist)
       if (polyDraft.length >= 3) {
         const first = polyDraft[0];
         const distPx = Math.hypot((pt.x - first.x) * width, (pt.y - first.y) * height);
-        if (distPx < 18) {
+        if (distPx < 20) {
           const xs = polyDraft.map((p) => p.x);
           const ys = polyDraft.map((p) => p.y);
           const minX = Math.min(...xs);
@@ -109,28 +271,71 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
             },
           });
           setPolyDraft([]);
+          setPolyDraggingIdx(null);
+          setPolyHoverPt(null);
+          setLoupeState(null);
           return;
         }
       }
+
+      // Check if grabbing an existing vertex to drag-adjust it
+      const existingIdx = polyDraft.findIndex(
+        (v) => Math.hypot((pt.x - v.x) * width, (pt.y - v.y) * height) < 18
+      );
+      if (existingIdx >= 0) {
+        setPolyDraggingIdx(existingIdx);
+        return;
+      }
+
+      const nextLen = polyDraft.length;
       setPolyDraft((prev) => [...prev, pt]);
+      setPolyDraggingIdx(nextLen);
+      setPolyHoverPt(pt);
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const pt = toNormPoint(e.clientX, e.clientY);
+
     if (activeTool === 'ruler' && rulerDrag) {
       e.stopPropagation();
-      setRulerDrag({ ...rulerDrag, end: toNormPoint(e.clientX, e.clientY) });
+      if (rulerDrag.draggingEndpoint === 'start') {
+        setRulerDrag({ ...rulerDrag, start: pt });
+      } else {
+        setRulerDrag({ ...rulerDrag, end: pt });
+      }
+      setLoupeState({ normX: pt.x, normY: pt.y, label: '2.5x 比例尺端點對位' });
     } else if (activeTool === 'brush_mask' && brushStroke) {
       e.stopPropagation();
-      const pt = toNormPoint(e.clientX, e.clientY);
       const last = brushStroke[brushStroke.length - 1];
       if (!last || Math.hypot((pt.x - last.x) * width, (pt.y - last.y) * height) > 6) {
         setBrushStroke([...brushStroke, pt]);
+      }
+    } else if (activeTool === 'eraser' && erasingActive) {
+      e.stopPropagation();
+      eraseZoneAtPoint(pt);
+    } else if (activeTool === 'manual_box_select' && boxSelectDrag) {
+      e.stopPropagation();
+      setBoxSelectDrag({ ...boxSelectDrag, end: pt });
+    } else if (activeTool === 'polygon_mask') {
+      if (polyDraggingIdx !== null) {
+        e.stopPropagation();
+        setPolyDraft((prev) =>
+          prev.map((v, idx) => (idx === polyDraggingIdx ? pt : v))
+        );
+        setPolyHoverPt(pt);
+        setLoupeState({ normX: pt.x, normY: pt.y, label: '2.5x 多邊形頂點對位' });
+      } else if (polyDraft.length > 0) {
+        setPolyHoverPt(pt);
       }
     }
   };
 
   const handlePointerUp = () => {
+    setLoupeState(null);
+    setPolyDraggingIdx(null);
+    setErasingActive(false);
+
     if (activeTool === 'ruler' && rulerDrag) {
       const lenPx = Math.hypot(
         (rulerDrag.end.x - rulerDrag.start.x) * width,
@@ -183,6 +388,26 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
         },
       });
       setBrushStroke(null);
+    } else if (activeTool === 'manual_box_select' && boxSelectDrag) {
+      const minX = Math.min(boxSelectDrag.start.x, boxSelectDrag.end.x);
+      const maxX = Math.max(boxSelectDrag.start.x, boxSelectDrag.end.x);
+      const minY = Math.min(boxSelectDrag.start.y, boxSelectDrag.end.y);
+      const maxY = Math.max(boxSelectDrag.start.y, boxSelectDrag.end.y);
+      const boxW = (maxX - minX) * width;
+      const boxH = (maxY - minY) * height;
+      setBoxSelectDrag(null);
+      setActiveTool('select');
+      if (boxW >= 18 && boxH >= 18) {
+        void runVisualSearch({
+          cropBoxNorm: {
+            x: minX,
+            y: minY,
+            w: maxX - minX,
+            h: maxY - minY,
+          },
+          forceRefresh: true,
+        });
+      }
     }
   };
 
@@ -211,25 +436,43 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
   }
 
   const interactiveDrawingTool =
-    activeTool === 'ruler' || activeTool === 'brush_mask' || activeTool === 'polygon_mask';
+    activeTool === 'ruler' ||
+    activeTool === 'brush_mask' ||
+    activeTool === 'polygon_mask' ||
+    activeTool === 'eraser' ||
+    activeTool === 'manual_box_select';
+
+  const loupeSize = 112;
+  const loupeLeft = loupeState
+    ? Math.max(6, Math.min(width - loupeSize - 6, loupeState.normX * width - loupeSize / 2))
+    : 0;
+  // Place Touch Loupe ~60px above finger touch center; if too close to top edge, flip below finger
+  const rawLoupeTop = loupeState ? loupeState.normY * height - 60 - loupeSize / 2 : 0;
+  const loupeTop = loupeState
+    ? rawLoupeTop >= 4
+      ? rawLoupeTop
+      : Math.min(height - loupeSize - 4, loupeState.normY * height + 36)
+    : 0;
 
   return (
-    <svg
-      ref={svgRef}
-      viewBox={`0 0 ${width} ${height}`}
-      style={{ touchAction: interactiveDrawingTool ? 'none' : 'auto' }}
-      className={`absolute inset-0 h-full w-full ${
-        interactiveDrawingTool ? 'cursor-crosshair pointer-events-auto' : 'pointer-events-auto'
-      }`}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-    >
-      <defs>
-        <pattern id="overlayRedHatch" width="12" height="12" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-          <line x1="0" y1="0" x2="0" y2="12" stroke="rgba(239, 68, 68, 0.55)" strokeWidth="2.5" />
-        </pattern>
-      </defs>
+    <div className="absolute inset-0 h-full w-full pointer-events-none">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ touchAction: interactiveDrawingTool ? 'none' : 'auto' }}
+        className={`absolute inset-0 h-full w-full ${
+          interactiveDrawingTool ? 'cursor-crosshair pointer-events-auto' : 'pointer-events-auto'
+        }`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      >
+        <defs>
+          <pattern id="overlayRedHatch" width="12" height="12" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="0" x2="0" y2="12" stroke="rgba(239, 68, 68, 0.55)" strokeWidth="2.5" />
+          </pattern>
+        </defs>
 
       {/* 1. Module 5: 3D Perspective Grid */}
       {calibration.showPerspectiveGrid && (
@@ -357,7 +600,9 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
       {polyDraft.length > 0 && (
         <g pointerEvents="none">
           <polyline
-            points={polyDraft.map((p) => `${p.x * width},${p.y * height}`).join(' ')}
+            points={[...polyDraft, ...(polyHoverPt ? [polyHoverPt] : [])]
+              .map((p) => `${p.x * width},${p.y * height}`)
+              .join(' ')}
             fill="rgba(239, 68, 68, 0.16)"
             stroke={CATEGORY_STYLE[activeBrushCategory].stroke}
             strokeWidth="2.2"
@@ -367,12 +612,29 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
               key={idx}
               cx={p.x * width}
               cy={p.y * height}
-              r={idx === 0 ? 7 : 4.5}
+              r={idx === 0 ? 7.5 : 5}
               fill={idx === 0 ? '#FDE68A' : CATEGORY_STYLE[activeBrushCategory].stroke}
               stroke="#0E1013"
               strokeWidth="1.5"
             />
           ))}
+        </g>
+      )}
+
+      {/* Manual Box Select Drag Preview (Feature 11) */}
+      {boxSelectDrag && (
+        <g pointerEvents="none">
+          <rect
+            x={Math.min(boxSelectDrag.start.x, boxSelectDrag.end.x) * width}
+            y={Math.min(boxSelectDrag.start.y, boxSelectDrag.end.y) * height}
+            width={Math.abs(boxSelectDrag.end.x - boxSelectDrag.start.x) * width}
+            height={Math.abs(boxSelectDrag.end.y - boxSelectDrag.start.y) * height}
+            rx={6}
+            fill="rgba(56, 189, 248, 0.18)"
+            stroke="#38BDF8"
+            strokeWidth="2.4"
+            strokeDasharray="6 4"
+          />
         </g>
       )}
 
@@ -532,7 +794,7 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
           );
         })}
 
-      {/* 6. Module 10: Visual Search Bounding Boxes */}
+      {/* 6. Feature 11: Visual Search Bounding Boxes */}
       {showVisualSearchOverlay &&
         visualSearchResults.map((vs) => {
           const bx = vs.bboxNorm.x * width;
@@ -541,6 +803,10 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
           const bh = vs.bboxNorm.h * height;
           const isSel = selectedFurnitureId === vs.slotId;
           const topMatch = vs.matches[0];
+          const labelText = topMatch
+            ? `${vs.slotLabel} · ${topMatch.product.brand} NT$${topMatch.product.priceTWD.toLocaleString()}`
+            : vs.slotLabel;
+          const pillW = Math.min(Math.max(150, labelText.length * 8 + 18), Math.max(180, width - bx - 4));
           return (
             <g
               key={vs.slotId}
@@ -556,23 +822,27 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
                 width={bw}
                 height={bh}
                 rx={6}
-                fill={isSel ? 'rgba(56, 189, 248, 0.16)' : 'rgba(56, 189, 248, 0.05)'}
+                fill={isSel ? 'rgba(56, 189, 248, 0.18)' : 'rgba(56, 189, 248, 0.06)'}
                 stroke="#38BDF8"
                 strokeWidth={isSel ? 2.8 : 1.8}
               />
               <rect
-                x={bx}
-                y={Math.max(6, by - 26)}
-                width={Math.min(260, Math.max(150, bw))}
+                x={Math.max(4, Math.min(width - pillW - 4, bx))}
+                y={Math.max(4, by - 25)}
+                width={pillW}
                 height={22}
                 rx={4}
-                fill="rgba(15, 23, 42, 0.94)"
+                fill="rgba(15, 23, 42, 0.95)"
                 stroke="#38BDF8"
               />
-              <text x={bx + 8} y={Math.max(21, by - 11)} fill="#E0F2FE" fontSize="11" fontWeight="600">
-                {topMatch
-                  ? `${topMatch.product.brand} · NT$${topMatch.product.priceTWD.toLocaleString()}`
-                  : vs.slotLabel}
+              <text
+                x={Math.max(10, Math.min(width - pillW + 4, bx + 7))}
+                y={Math.max(19, by - 10)}
+                fill="#E0F2FE"
+                fontSize="11"
+                fontWeight="600"
+              >
+                {labelText}
               </text>
             </g>
           );
@@ -623,6 +893,32 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
           </text>
         </g>
       )}
-    </svg>
+      </svg>
+
+      {/* 8. Touch Loupe (偏移放大鏡 2.5x): floats ~60px above finger touch point during ruler/polygon vertex drag */}
+      {loupeState && (
+        <div
+          data-testid="touch-loupe"
+          style={{
+            left: loupeLeft,
+            top: loupeTop,
+            width: loupeSize,
+            height: loupeSize,
+          }}
+          className="pointer-events-none absolute z-40 flex flex-col items-center justify-center rounded-full border-2 border-[#FBBF24] bg-[#0E1013] shadow-[0_8px_28px_rgba(0,0,0,0.85)] ring-2 ring-black/60"
+        >
+          <canvas
+            ref={loupeCanvasRef}
+            width={loupeSize}
+            height={loupeSize}
+            className="h-full w-full rounded-full"
+          />
+          <span className="absolute -bottom-5 whitespace-nowrap rounded bg-[#0E1013]/95 px-1.5 py-0.5 text-[9px] font-bold text-[#FDE68A] border border-[#FBBF24]/50 shadow">
+            {loupeState.label}
+          </span>
+        </div>
+      )}
+    </div>
   );
 };
+

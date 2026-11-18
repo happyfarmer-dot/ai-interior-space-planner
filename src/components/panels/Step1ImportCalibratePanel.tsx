@@ -50,6 +50,7 @@ export const Step1ImportCalibratePanel: React.FC = () => {
     runDetectSceneVLM,
     geminiConfig,
     setShowGeminiSettings,
+    isAiBusy,
   } = useDesignStore();
 
   const { scene, calibration, protectionZones, furniture } = state.present;
@@ -59,6 +60,7 @@ export const Step1ImportCalibratePanel: React.FC = () => {
 
   const hasPhoto = Boolean(scene.imageUrl);
   const geminiReady = Boolean(geminiConfig.apiKey.trim());
+  const busy = Boolean(isAiBusy);
 
   const handleFilePicked = (file: File | undefined | null) => {
     if (!file) return;
@@ -171,30 +173,30 @@ export const Step1ImportCalibratePanel: React.FC = () => {
             拍攝室內照片或選擇相簿／檔案上傳
           </p>
           <p className="mt-0.5 text-[11px] text-slate-400">
-            {geminiReady
-              ? '上傳後將自動呼叫 Gemini Vision 辨識家具、窗戶、冷氣與動線尺度'
-              : '支援 JPG / PNG / WebP，行動裝置支援直接呼叫相機拍攝'}
+            OffscreenCanvas 自動壓縮至長邊 1280px–1536px（JPEG 0.85 · ≦300KB），防止手機 OOM 並節省 Token
           </p>
 
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
               type="button"
+              disabled={busy}
               onClick={() => {
                 if (isNativeApp()) pickRoomPhotoNative('camera');
                 else cameraInputRef.current?.click();
               }}
-              className="flex items-center justify-center gap-1.5 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+              className="flex items-center justify-center gap-1.5 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 transition cursor-pointer"
             >
               <Camera className="h-3.5 w-3.5" />
               拍攝照片
             </button>
             <button
               type="button"
+              disabled={busy}
               onClick={() => {
                 if (isNativeApp()) pickRoomPhotoNative('photos');
                 else fileInputRef.current?.click();
               }}
-              className="flex items-center justify-center gap-1.5 rounded-lg border border-[#C89F72]/50 bg-[#1B2028] py-2 text-xs font-semibold text-[#E2BE96] hover:bg-[#242A35] transition cursor-pointer"
+              className="flex items-center justify-center gap-1.5 rounded-lg border border-[#C89F72]/50 bg-[#1B2028] py-2 text-xs font-semibold text-[#E2BE96] hover:bg-[#242A35] disabled:opacity-40 transition cursor-pointer"
             >
               <Upload className="h-3.5 w-3.5" />
               上傳圖片
@@ -219,8 +221,9 @@ export const Step1ImportCalibratePanel: React.FC = () => {
               </div>
               <button
                 type="button"
+                disabled={busy}
                 onClick={runDetectSceneVLM}
-                className="shrink-0 rounded-md border border-sky-500/40 bg-sky-500/15 px-2 py-1 text-[10.5px] font-semibold text-sky-200 hover:bg-sky-500/25 cursor-pointer"
+                className="shrink-0 rounded-md border border-sky-500/40 bg-sky-500/15 px-2 py-1 text-[10.5px] font-semibold text-sky-200 hover:bg-sky-500/25 disabled:opacity-40 cursor-pointer"
                 title="使用 Gemini Vision 重新掃描照片家具與機電結構"
               >
                 AI 分析空間
@@ -422,7 +425,7 @@ export const Step1ImportCalibratePanel: React.FC = () => {
           </h3>
           <button
             type="button"
-            disabled={!hasPhoto}
+            disabled={!hasPhoto || busy}
             onClick={runDetectSceneVLM}
             className="flex items-center gap-1 shrink-0 rounded bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-300 border border-sky-500/30 hover:bg-sky-500/25 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >

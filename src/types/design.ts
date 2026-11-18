@@ -15,7 +15,9 @@ export type ActiveCanvasTool =
   | 'ruler'
   | 'brush_mask'
   | 'polygon_mask'
-  | 'material_pick';
+  | 'eraser'
+  | 'material_pick'
+  | 'manual_box_select';
 
 export type ScalePreset =
   | 'door_210'
@@ -214,6 +216,7 @@ export interface ParsedDesignConstraints {
   maxBudgetTWD: number | null;
   petFriendly: boolean;
   catTreeRequired: boolean;
+  fengShuiMode?: boolean;
   preserveItems: string[];
   minWalkwayCm: number;
   requiredZones: string[];
@@ -231,6 +234,14 @@ export interface CustomDesignPrompt {
 
 export type TrafficLight = 'green' | 'yellow' | 'red';
 
+export interface FengShuiCheckResult {
+  ruleId: 'door_stove' | 'through_wind' | 'beam_over_bed' | 'mirror_facing_bed';
+  title: string;
+  status: TrafficLight;
+  finding: string;
+  remedy: string;
+}
+
 export interface ErgonomicsReport {
   mainWalkwayCm: number;
   walkwayStatus: TrafficLight;
@@ -245,8 +256,17 @@ export interface ErgonomicsReport {
     conflictCount: number;
     conflicts: string[];
   };
+  fengShuiChecks?: FengShuiCheckResult[];
   overallScore: number;
   summaryText: string;
+}
+
+export interface ConversationalEditMessage {
+  id: string;
+  instruction: string;
+  createdAt: string;
+  resultNote: string;
+  fromCache?: boolean;
 }
 
 export interface RearrangementProposal {
@@ -308,7 +328,12 @@ export interface MaterialOverrides {
   activeTarget: SurfaceTarget | null;
 }
 
-export type FurnitureBrand = 'IKEA' | 'MUJI 無印良品' | 'NITORI 宜得利' | 'MR. LIVING 居家先生';
+export type FurnitureBrand =
+  | 'IKEA'
+  | 'MUJI 無印良品'
+  | 'NITORI 宜得利'
+  | 'MR. LIVING 居家先生'
+  | 'HOLA 和樂家居';
 
 export interface CatalogProduct {
   id: string;
@@ -325,11 +350,17 @@ export interface CatalogProduct {
   styleAffinity: StyleId[];
   colorHex: string;
   urlHint: string;
+  searchUrl?: string;
 }
 
 export interface VisualSearchMatch {
   slotId: string;
   slotLabel: string;
+  category?: FurnitureCategory;
+  styleNote?: string;
+  colorTone?: string;
+  searchKeywordZh?: string;
+  box2d?: [number, number, number, number]; // [ymin, xmin, ymax, xmax] normalized 0..1000
   bboxNorm: { x: number; y: number; w: number; h: number };
   estimatedDimsCm: { w: number; d: number; h: number };
   matches: Array<{

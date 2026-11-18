@@ -1,6 +1,8 @@
 import { getMaterialById } from '../data/materialsCatalog';
 import { getStyleById } from '../data/stylesCatalog';
 import type {
+  CatalogProduct,
+  FurnitureBrand,
   FurnitureCategory,
   FurnitureItem,
   HighlightZone,
@@ -13,10 +15,12 @@ import type {
   RearrangementProposal,
   RoomScene,
   StyleId,
+  VisualSearchMatch,
 } from '../types/design';
 import { evaluateErgonomics } from '../utils/ergonomics';
 import { doesRectIntersectDoorSwing, getItemFootprintRect, rectsOverlap } from '../utils/geometry';
 import {
+  cropNormalizedImageRegion,
   matchGeminiAspectRatio,
   urlToInlineImagePart,
   type EncodedInlineImage,
@@ -30,7 +34,8 @@ export type GeminiErrorCode =
   | 'MODEL_UNAVAILABLE'
   | 'SAFETY_BLOCK'
   | 'NETWORK_ERROR'
-  | 'INVALID_RESPONSE';
+  | 'INVALID_RESPONSE'
+  | 'ABORTED';
 
 export class GeminiServiceError extends Error {
   readonly code: GeminiErrorCode;
@@ -42,6 +47,14 @@ export class GeminiServiceError extends Error {
     this.code = code;
     this.needsKey = needsKey;
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  if (err instanceof GeminiServiceError && err.code === 'ABORTED') return true;
+  if (err && typeof err === 'object' && 'name' in err && (err as { name?: string }).name === 'AbortError') {
+    return true;
+  }
+  return false;
 }
 
 const VALID_FURNITURE_CATEGORIES: FurnitureCategory[] = [
@@ -226,7 +239,7 @@ function mapHttpFailureToError(
         'INVALID_RESPONSE',
         `Gemini 請求參數不被模型 ${modelId} 接受：${msg}`
       ),
-      retryNextModel: /not supported|modality|aspect|size/i.test(msg),
+      retryNextModel: /not supported|modality|aspect|size|schema/i.test(msg),
     };
   }
 
@@ -238,8 +251,15 @@ function mapHttpFailureToError(
 
 async function callGeminiVisionJson<T>(
   prompt: string,
-  images: EncodedInlineImage[] = []
+  images: EncodedInlineImage[] = [],
+  options?: {
+    signal?: AbortSignal;
+    responseSchema?: Record<string, unknown>;
+  }
 ): Promise<T> {
+  if (options?.signal?.aborted) {
+    throw new GeminiServiceError('ABORTED', '已取消生成');
+  }
   const apiKey = requireApiKey();
   const cfg = getGeminiRuntimeConfig();
   const candidateModels = Array.from(
@@ -259,6 +279,17 @@ async function callGeminiVisionJson<T>(
   let lastError: GeminiServiceError | null = null;
 
   for (const modelId of candidateModels) {
+    if (options?.signal?.aborted) {
+      throw new GeminiServiceError('ABORTED', '已取消生成');
+    }
+    const generationConfig: Record<string, unknown> = {
+      temperature: 0.25,
+      responseMimeType: 'application/json',
+    };
+    if (options?.responseSchema) {
+      generationConfig.responseSchema = options.responseSchema;
+    }
+
     let response: Response;
     try {
       response = await fetch(buildApiUrl(modelId), {
@@ -267,15 +298,16 @@ async function callGeminiVisionJson<T>(
           'Content-Type': 'application/json',
           'x-goog-api-key': apiKey,
         },
+        signal: options?.signal,
         body: JSON.stringify({
           contents: [{ role: 'user', parts }],
-          generationConfig: {
-            temperature: 0.25,
-            responseMimeType: 'application/json',
-          },
+          generationConfig,
         }),
       });
     } catch (err) {
+      if (isAbortError(err) || options?.signal?.aborted) {
+        throw new GeminiServiceError('ABORTED', '已取消生成');
+      }
       const msg = err instanceof Error ? err.message : String(err);
       throw new GeminiServiceError('NETWORK_ERROR', `無法連線至 Gemini API：${msg}`);
     }
@@ -338,7 +370,11 @@ async function callGeminiImageEdit(params: {
   images: EncodedInlineImage[];
   targetWidth: number;
   targetHeight: number;
+  signal?: AbortSignal;
 }): Promise<{ imageDataUrl: string; modelUsed: string; textNote: string | null }> {
+  if (params.signal?.aborted) {
+    throw new GeminiServiceError('ABORTED', '已取消生成');
+  }
   const apiKey = requireApiKey();
   const cfg = getGeminiRuntimeConfig();
   const candidateModels = Array.from(
@@ -359,6 +395,9 @@ async function callGeminiImageEdit(params: {
   let lastError: GeminiServiceError | null = null;
 
   for (const modelId of candidateModels) {
+    if (params.signal?.aborted) {
+      throw new GeminiServiceError('ABORTED', '已取消生成');
+    }
     let response: Response;
     try {
       response = await fetch(buildApiUrl(modelId), {
@@ -367,6 +406,7 @@ async function callGeminiImageEdit(params: {
           'Content-Type': 'application/json',
           'x-goog-api-key': apiKey,
         },
+        signal: params.signal,
         body: JSON.stringify({
           contents: [{ role: 'user', parts }],
           generationConfig: {
@@ -378,6 +418,9 @@ async function callGeminiImageEdit(params: {
         }),
       });
     } catch (err) {
+      if (isAbortError(err) || params.signal?.aborted) {
+        throw new GeminiServiceError('ABORTED', '已取消生成');
+      }
       const msg = err instanceof Error ? err.message : String(err);
       throw new GeminiServiceError('NETWORK_ERROR', `圖像渲染連線失敗：${msg}`);
     }
@@ -505,6 +548,7 @@ export async function analyzeUploadedRoomWithGemini(params: {
   naturalWidth: number;
   naturalHeight: number;
   fallbackName?: string;
+  signal?: AbortSignal;
 }): Promise<{
   sceneName: string;
   description: string;
@@ -576,7 +620,9 @@ export async function analyzeUploadedRoomWithGemini(params: {
 
 請務必依照片中真實可見的物件產生對應座標，不要憑空編造照片裡不存在的門窗或冷氣。`;
 
-  const raw = await callGeminiVisionJson<RawAnalyzedRoomResponse>(prompt, [encoded]);
+  const raw = await callGeminiVisionJson<RawAnalyzedRoomResponse>(prompt, [encoded], {
+    signal: params.signal,
+  });
 
   const widthCm = Math.round(clamp(Number(raw.widthCm) || 380, 220, 900));
   const depthCm = Math.round(clamp(Number(raw.depthCm) || 460, 220, 1000));
@@ -719,18 +765,22 @@ export async function analyzeUploadedRoomWithGemini(params: {
 
 export async function parseConstraintsWithGemini(
   freeText: string,
-  selectedTags: string[]
+  selectedTags: string[],
+  options?: { fengShuiMode?: boolean; signal?: AbortSignal }
 ): Promise<ParsedDesignConstraints> {
+  const fengShuiMode = Boolean(options?.fengShuiMode);
   const prompt = `請將以下屋主客製化室內裝潢需求，解析為嚴格 JSON 格式的空間設計約束條件（所有文字欄位使用繁體中文）：
 
 已選標籤：${selectedTags.join('、') || '無'}
 屋主補充需求：${freeText || '無'}
+台灣傳統風水避讓模式：${fengShuiMode ? '已開啟（需避開開門見灶、穿堂煞、橫樑壓床、鏡子正對床鋪）' : '已關閉（僅依現代機能與動線最佳化）'}
 
 回傳 JSON 結構：
 {
   "maxBudgetTWD": number | null (台幣整數，例如 30 萬則為 300000，無明確數字則為 null),
   "petFriendly": boolean,
   "catTreeRequired": boolean,
+  "fengShuiMode": boolean,
   "preserveItems": string[],
   "minWalkwayCm": number (無障礙或寬走道需求為 90，一般為 75),
   "requiredZones": string[],
@@ -739,7 +789,17 @@ export async function parseConstraintsWithGemini(
   "notes": string[] (2~4 條清楚具體的 AI 執行規範摘要)
 }`;
 
-  const parsed = await callGeminiVisionJson<Partial<ParsedDesignConstraints>>(prompt);
+  const parsed = await callGeminiVisionJson<Partial<ParsedDesignConstraints>>(prompt, [], {
+    signal: options?.signal,
+  });
+
+  const notes =
+    Array.isArray(parsed.notes) && parsed.notes.length > 0
+      ? parsed.notes.map(String)
+      : ['已由 Gemini AI 解析客製需求並注入空間管線'];
+  if (fengShuiMode && !notes.some((n) => /風水|穿堂|壓床/.test(n))) {
+    notes.push('已啟用台灣傳統風水避讓：自動檢核開門見灶、穿堂煞、橫樑壓床與鏡子對床並提供屏風化解建議');
+  }
 
   return {
     maxBudgetTWD:
@@ -748,6 +808,7 @@ export async function parseConstraintsWithGemini(
         : null,
     petFriendly: Boolean(parsed.petFriendly),
     catTreeRequired: Boolean(parsed.catTreeRequired),
+    fengShuiMode,
     preserveItems: Array.isArray(parsed.preserveItems)
       ? parsed.preserveItems.map(String)
       : [],
@@ -762,7 +823,7 @@ export async function parseConstraintsWithGemini(
       parsed.storagePriority === 'high' || parsed.storagePriority === 'medium'
         ? parsed.storagePriority
         : 'low',
-    notes: Array.isArray(parsed.notes) && parsed.notes.length > 0 ? parsed.notes.map(String) : ['已由 Gemini AI 解析客製需求並注入空間管線'],
+    notes,
   };
 }
 
@@ -804,6 +865,7 @@ export async function renderRearrangedRoomImageWithGemini(params: {
   protectionZones: ProtectionZone[];
   constraints: ParsedDesignConstraints;
   lighting: LightingConfig;
+  signal?: AbortSignal;
 }): Promise<{ imageUrl: string; description: string }> {
   const { scene, proposal, protectionZones, constraints, lighting } = params;
   const encoded = await urlToInlineImagePart(scene.imageUrl, 1280, false);
@@ -837,6 +899,7 @@ TARGET REARRANGEMENT PLAN — "${proposal.title}":
 - Updated furniture placements:
 ${furnitureSummary}
 ${constraints.petFriendly ? '- Ensure durable pet-friendly surfaces and clear vertical cat pathway if added.' : ''}
+${constraints.fengShuiMode ? '- Respect traditional Taiwanese Feng Shui avoidance: keep beds/sofas clear from directly under overhead ceiling beams, and avoid direct door-to-window through-draft alignment.' : ''}
 ${constraints.preserveItems.length > 0 ? `- Must retain existing items: ${constraints.preserveItems.join(', ')}.` : ''}
 
 LIGHTING & REALISM:
@@ -849,6 +912,7 @@ LIGHTING & REALISM:
     images: [encoded],
     targetWidth: scene.imageWidth,
     targetHeight: scene.imageHeight,
+    signal: params.signal,
   });
 
   return {
@@ -863,6 +927,7 @@ export async function generateRearrangementPlanWithGemini(params: {
   protectionZones: ProtectionZone[];
   constraints: ParsedDesignConstraints;
   lighting: LightingConfig;
+  signal?: AbortSignal;
 }): Promise<RearrangementProposal[]> {
   const { scene, furniture, protectionZones, constraints, lighting } = params;
   const encoded = await urlToInlineImagePart(scene.imageUrl, 1280, false);
@@ -884,6 +949,10 @@ export async function generateRearrangementPlanWithGemini(params: {
     )
     .join('\n');
 
+  const fengShuiInstruction = constraints.fengShuiMode
+    ? `- 台灣傳統風水避讓模式：已開啟！請務必將「避開開門見灶、穿堂煞（門窗直線對沖）、橫樑壓床／壓沙發、鏡子正對床鋪」納入重排演算邏輯，並於 rationale 理由中說明如何避讓或建議屏風／床頭櫃化解方式。`
+    : `- 台灣傳統風水避讓模式：已關閉（僅依現代空間機能、採光與人體工學最佳化）。`;
+
   const prompt = `你是一位頂級台灣室內空間設計師。請根據這張室內照片、空間實際尺度（寬 ${scene.roomDimensionsCm.width}cm × 深 ${scene.roomDimensionsCm.depth}cm × 高 ${scene.roomDimensionsCm.height}cm，採光窗位於 ${scene.windowSide} 側），為使用者規劃 3 套**物理真實可行且差異明確**的「現有傢俱重排」方案。
 
 不可更動結構與機電遮罩（禁止家具遮擋）：
@@ -900,6 +969,7 @@ ${furnDesc || '（請先根據照片中可見家具給予合理家具 ID 與搬�
 - 寵物友善：${constraints.petFriendly ? '是' : '否'}${constraints.catTreeRequired ? '（建議其中一方案納入窗邊貓跳台）' : ''}
 - 收納優先級：${constraints.storagePriority}
 - 保留原物件：${constraints.preserveItems.join('、') || '既有主要大型家具'}
+${fengShuiInstruction}
 
 請輸出嚴格 JSON 格式（繁體中文標題與詳細理由 + visualPromptEn 英文生圖指令）：
 {
@@ -928,7 +998,9 @@ ${furnDesc || '（請先根據照片中可見家具給予合理家具 ID 與搬�
   ]
 }`;
 
-  const raw = await callGeminiVisionJson<RawProposalPlanResponse>(prompt, [encoded]);
+  const raw = await callGeminiVisionJson<RawProposalPlanResponse>(prompt, [encoded], {
+    signal: params.signal,
+  });
   const rawList = Array.isArray(raw.proposals) ? raw.proposals.slice(0, 3) : [];
   if (rawList.length === 0) {
     throw new GeminiServiceError('INVALID_RESPONSE', 'Gemini 未能產出有效的傢俱重排方案，請再試一次。');
@@ -1004,7 +1076,8 @@ ${furnDesc || '（請先根據照片中可見家具給予合理家具 ID 與搬�
       scene,
       combinedLayout,
       protectionZones,
-      constraints.minWalkwayCm
+      constraints.minWalkwayCm,
+      Boolean(constraints.fengShuiMode)
     );
 
     return {
@@ -1033,6 +1106,7 @@ ${furnDesc || '（請先根據照片中可見家具給予合理家具 ID 與搬�
     protectionZones,
     constraints,
     lighting,
+    signal: params.signal,
   });
 
   proposals[0] = {
@@ -1051,6 +1125,7 @@ export async function renderStyleTransferWithGemini(params: {
   constraints: ParsedDesignConstraints;
   lighting: LightingConfig;
   materials: MaterialOverrides;
+  signal?: AbortSignal;
 }): Promise<{ imageUrl: string; description: string }> {
   const { scene, styleId, intensity, protectionZones, constraints, lighting, materials } = params;
   const encoded = await urlToInlineImagePart(scene.imageUrl, 1280, false);
@@ -1088,6 +1163,7 @@ STYLE & MATERIAL TRANSFORMATION (Blend Strength Target: ${intensity}%):
 - Upholstery & textiles: ${sofaMat ? sofaMat.name : 'harmonized sofa & soft furnishings'}, Curtains: ${curtainMat ? curtainMat.name : 'style-appropriate window dressings'}
 ${constraints.petFriendly ? '- CRITICAL USER REQUIREMENT: Pet-friendly apartment (2 cats) — use scratch-resistant tightly woven fabrics and hard-wearing flooring; keep clear floor pathways.' : ''}
 ${constraints.catTreeRequired ? '- Include a tasteful aesthetic wooden cat tree corner if natural space permits without blocking traffic or windows.' : ''}
+${constraints.fengShuiMode ? '- Respect Taiwanese Feng Shui principles: avoid exposed sharp beam edges over seating/beds and avoid mirrors facing beds.' : ''}
 ${constraints.preserveItems.length > 0 ? `- Preserve the core silhouette and placement of: ${constraints.preserveItems.join(', ')}.` : ''}
 ${constraints.requiredZones.length > 0 ? `- Incorporate functional cues for: ${constraints.requiredZones.join(', ')}.` : ''}
 
@@ -1100,6 +1176,7 @@ LIGHTING:
     images: [encoded],
     targetWidth: scene.imageWidth,
     targetHeight: scene.imageHeight,
+    signal: params.signal,
   });
 
   return {
@@ -1127,6 +1204,7 @@ export async function analyzeObjectZonesWithGemini(params: {
   heightCm: number;
   protectionZones: ProtectionZone[];
   existingFurniture: FurnitureItem[];
+  signal?: AbortSignal;
 }): Promise<HighlightZone[]> {
   const { scene, itemName, widthCm, depthCm, heightCm, protectionZones, existingFurniture } = params;
   const encoded = await urlToInlineImagePart(scene.imageUrl, 1280, false);
@@ -1159,7 +1237,9 @@ export async function analyzeObjectZonesWithGemini(params: {
   ]
 }`;
 
-  const raw = await callGeminiVisionJson<RawZonesResponse>(prompt, [encoded]);
+  const raw = await callGeminiVisionJson<RawZonesResponse>(prompt, [encoded], {
+    signal: params.signal,
+  });
   const zonesRaw = Array.isArray(raw.zones) ? raw.zones.slice(0, 3) : [];
   if (zonesRaw.length === 0) {
     throw new GeminiServiceError('INVALID_RESPONSE', 'Gemini 未識別出適合擺放此新單品的建議區域，請確認照片角度或尺寸設定。');
@@ -1220,6 +1300,7 @@ export async function compositeNewObjectWithGemini(params: {
   zone: HighlightZone;
   constraints: ParsedDesignConstraints;
   lighting: LightingConfig;
+  signal?: AbortSignal;
 }): Promise<{ imageUrl: string; description: string }> {
   const roomPart = await urlToInlineImagePart(params.baseImageUrl, 1280, false);
   const itemPart = await urlToInlineImagePart(params.objectImageUrl, 1024, true);
@@ -1247,6 +1328,7 @@ ${params.constraints.petFriendly ? '- Ensure stable pet-safe positioning away fr
     images: [roomPart, itemPart],
     targetWidth: params.imageWidth,
     targetHeight: params.imageHeight,
+    signal: params.signal,
   });
 
   return {
@@ -1263,6 +1345,7 @@ export async function refineLightingAndMaterialsWithGemini(params: {
   materials: MaterialOverrides;
   protectionZones: ProtectionZone[];
   constraints: ParsedDesignConstraints;
+  signal?: AbortSignal;
 }): Promise<{ imageUrl: string; description: string }> {
   const roomPart = await urlToInlineImagePart(params.baseImageUrl, 1280, false);
 
@@ -1318,6 +1401,7 @@ Maintain photorealistic textures, natural global illumination, and realistic sha
     images: [roomPart],
     targetWidth: params.imageWidth,
     targetHeight: params.imageHeight,
+    signal: params.signal,
   });
 
   return {
@@ -1325,3 +1409,263 @@ Maintain photorealistic textures, natural global illumination, and realistic sha
     description: `${res.modelUsed} 已完成 ${params.lighting.kelvin}K 光影與指定表面材質實景重繪`,
   };
 }
+
+export async function conversationalEditWithGemini(params: {
+  baseImageUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  instruction: string;
+  history: string[];
+  protectionZones: ProtectionZone[];
+  lighting: LightingConfig;
+  signal?: AbortSignal;
+}): Promise<{ imageUrl: string; description: string }> {
+  const roomPart = await urlToInlineImagePart(params.baseImageUrl, 1280, false);
+  const lockedDesc = params.protectionZones
+    .filter((z) => z.locked)
+    .map((z) => z.label)
+    .join(', ');
+
+  const historyContext =
+    params.history.length > 0
+      ? `\nPrevious iterative adjustments already applied:\n${params.history
+          .slice(-4)
+          .map((h, i) => `${i + 1}. ${h}`)
+          .join('\n')}`
+      : '';
+
+  const prompt = `Perform a targeted, localized conversational edit on this exact interior design photograph based on the user's instruction, while keeping ALL unmentioned furniture, flooring, walls, lighting, and room geometry 100% identical in place.
+
+USER LOCAL EDIT INSTRUCTION:
+"${params.instruction}"${historyContext}
+
+STRICT LOCAL INPAINTING RULES:
+- Modify ONLY the specific item, color, lamp, decor, or localized area requested by the user.
+- DO NOT move, resize, or alter any other furniture pieces that the user did not ask to change.
+- Protected fixed architectural & MEP areas (never block or alter): ${lockedDesc || 'Windows, doors, AC unit, electrical breaker panel, ceiling beams'}.
+- Maintain consistent ${params.lighting.kelvin}K lighting, perspective lines, and realistic floor contact shadows.`;
+
+  const res = await callGeminiImageEdit({
+    prompt,
+    images: [roomPart],
+    targetWidth: params.imageWidth,
+    targetHeight: params.imageHeight,
+    signal: params.signal,
+  });
+
+  return {
+    imageUrl: res.imageDataUrl,
+    description: `${res.modelUsed} 已完成對話微調：「${params.instruction.slice(0, 32)}」`,
+  };
+}
+
+const PURCHASABLE_ITEMS_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: {
+    items: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING' },
+          category: { type: 'STRING' },
+          styleNote: { type: 'STRING' },
+          colorTone: { type: 'STRING' },
+          materialNote: { type: 'STRING' },
+          searchKeywordZh: { type: 'STRING' },
+          box_2d: {
+            type: 'ARRAY',
+            items: { type: 'NUMBER' },
+          },
+          estimatedWidthCm: { type: 'NUMBER' },
+          estimatedDepthCm: { type: 'NUMBER' },
+          estimatedHeightCm: { type: 'NUMBER' },
+          estimatedPriceTWD: { type: 'NUMBER' },
+        },
+        required: [
+          'name',
+          'category',
+          'box_2d',
+          'estimatedWidthCm',
+          'estimatedDepthCm',
+          'estimatedHeightCm',
+          'searchKeywordZh',
+        ],
+      },
+    },
+  },
+  required: ['items'],
+};
+
+interface RawDetectedShoppingResponse {
+  items?: Array<{
+    name?: string;
+    category?: string;
+    styleNote?: string;
+    colorTone?: string;
+    materialNote?: string;
+    searchKeywordZh?: string;
+    box_2d?: number[];
+    estimatedWidthCm?: number;
+    estimatedDepthCm?: number;
+    estimatedHeightCm?: number;
+    estimatedPriceTWD?: number;
+  }>;
+}
+
+export function buildBrandShoppingSearchUrl(brand: FurnitureBrand, keyword: string): string {
+  const q = encodeURIComponent(keyword.trim() || '北歐家具');
+  switch (brand) {
+    case 'IKEA':
+      return `https://www.ikea.com.tw/zh/search?q=${q}`;
+    case 'MUJI 無印良品':
+      return `https://www.muji.com/tw/zh_tw/search?q=${q}`;
+    case 'NITORI 宜得利':
+      return `https://www.nitori-net.tw/search?keyword=${q}`;
+    case 'MR. LIVING 居家先生':
+      return `https://www.mrliving.com.tw/catalogsearch/result/?q=${q}`;
+    case 'HOLA 和樂家居':
+      return `https://www.hola.com.tw/search?q=${q}`;
+  }
+}
+
+export async function detectPurchasableItemsWithGemini(params: {
+  imageUrl: string;
+  pixelPerCm: number;
+  walkwayCm: number;
+  roomDimensionsCm: { width: number; depth: number; height: number };
+  activeStyle: StyleId;
+  petFriendly: boolean;
+  cropBoxNorm?: { x: number; y: number; w: number; h: number };
+  signal?: AbortSignal;
+}): Promise<VisualSearchMatch[]> {
+  let targetUrl = params.imageUrl;
+  if (params.cropBoxNorm) {
+    targetUrl = await cropNormalizedImageRegion(params.imageUrl, params.cropBoxNorm);
+  }
+  const encoded = await urlToInlineImagePart(targetUrl, 1280, false);
+
+  const maxAllowedWidthCm = Math.max(45, params.roomDimensionsCm.width - Math.max(60, params.walkwayCm));
+  const maxAllowedDepthCm = Math.max(40, params.roomDimensionsCm.depth - Math.max(60, params.walkwayCm));
+
+  const prompt = params.cropBoxNorm
+    ? `你是一位台灣專業軟裝採購顧問。使用者在室內設計模擬圖上手動框選了這塊局部區域，請精準辨識此框選畫面中**唯一最主要的可購買傢俱或燈飾單品**。
+空間物理限制：空間總寬 ${params.roomDimensionsCm.width}cm × 深 ${params.roomDimensionsCm.depth}cm，比例尺 ${params.pixelPerCm} px/cm，預留走道 ${params.walkwayCm}cm。單品寬度不得超過 ${maxAllowedWidthCm}cm。
+請回傳嚴格 JSON（items 陣列僅放 1 個最核心的物件），box_2d 格式為 [ymin, xmin, ymax, xmax]（0 到 1000 整數座標），searchKeywordZh 請填寫適合在台灣 IKEA / MUJI / 宜得利搜尋的精準繁體中文商品關鍵字（例如「米白三人布沙發」、「橡木圓形茶幾」、「黑色極簡落地燈」）。`
+    : `你是一位台灣專業軟裝採購顧問。請針對這張「最終室內設計模擬圖」，透過視覺偵測找出畫面中**真正存在且清晰可見**的可購買傢俱與燈飾單品（例如：沙發、茶幾、單椅、落地燈、邊几、地毯、電視櫃、床架、書桌、貓跳台）。
+
+嚴格防呆與物理尺寸過濾規範：
+1. **嚴禁列出畫面中不存在的物件**：若畫面中沒有貓跳台、沒有床架或沒有餐桌，絕對不可列入！最多列出 2～6 件最明確的單品。
+2. **精準 2D 邊界框 (box_2d)**：每個物件必須提供 [ymin, xmin, ymax, xmax]（0 到 1000 歸一化座標），且方框必須緊密貼合該物件在圖片中的真實像素位置。
+3. **空間物理尺寸過濾**：目前空間寬 ${params.roomDimensionsCm.width}cm × 深 ${params.roomDimensionsCm.depth}cm（比例尺 ${params.pixelPerCm} px/cm，走道淨寬 ${params.walkwayCm}cm）。請依透視比例推估每件單品的真實長寬高（cm），單品寬度必須 <= ${maxAllowedWidthCm}cm、深度 <= ${maxAllowedDepthCm}cm，確保放得進此空間且不影響走道動線。
+4. **搜尋關鍵字 (searchKeywordZh)**：請提供 4～8 字適合直接於台灣 IKEA、MUJI 無印良品、宜得利家居搜尋購買的繁體中文關鍵字（含色系或材質特徵，如「北歐淺灰亞麻三人沙發」、「原木實木矮茶幾」）。`;
+
+  const raw = await callGeminiVisionJson<RawDetectedShoppingResponse>(prompt, [encoded], {
+    signal: params.signal,
+    responseSchema: PURCHASABLE_ITEMS_RESPONSE_SCHEMA,
+  });
+
+  const rawItems = Array.isArray(raw.items) ? raw.items : [];
+  if (rawItems.length === 0) {
+    throw new GeminiServiceError('INVALID_RESPONSE', 'Gemini 未在目前畫面中偵測到明確的傢俱或燈飾單品。');
+  }
+
+  const brandsOrder: FurnitureBrand[] = params.petFriendly
+    ? ['NITORI 宜得利', 'IKEA', 'MR. LIVING 居家先生', 'MUJI 無印良品']
+    : ['IKEA', 'MUJI 無印良品', 'NITORI 宜得利', 'MR. LIVING 居家先生'];
+
+  return rawItems.slice(0, params.cropBoxNorm ? 1 : 6).map((item, idx) => {
+    const cat = normalizeFurnitureCategory(item.category);
+    const estW = Math.round(clamp(Number(item.estimatedWidthCm) || 90, 28, maxAllowedWidthCm));
+    const estD = Math.round(clamp(Number(item.estimatedDepthCm) || 60, 25, maxAllowedDepthCm));
+    const estH = Math.round(clamp(Number(item.estimatedHeightCm) || 75, 25, 225));
+    const basePrice = Math.round(clamp(Number(item.estimatedPriceTWD) || 6800, 990, 68000));
+
+    let ymin = 450;
+    let xmin = 250;
+    let ymax = 820;
+    let xmax = 650;
+    if (Array.isArray(item.box_2d) && item.box_2d.length >= 4) {
+      const [y0, x0, y1, x1] = item.box_2d.map((v) => clamp(Number(v) || 0, 0, 1000));
+      ymin = Math.min(y0, y1);
+      ymax = Math.max(y0, y1);
+      xmin = Math.min(x0, x1);
+      xmax = Math.max(x0, x1);
+      if (ymax - ymin < 40) ymax = Math.min(1000, ymin + 120);
+      if (xmax - xmin < 40) xmax = Math.min(1000, xmin + 120);
+    }
+
+    let bboxNorm = {
+      x: clamp(xmin / 1000, 0.01, 0.94),
+      y: clamp(ymin / 1000, 0.01, 0.94),
+      w: clamp((xmax - xmin) / 1000, 0.05, 0.96),
+      h: clamp((ymax - ymin) / 1000, 0.05, 0.96),
+    };
+
+    if (params.cropBoxNorm) {
+      bboxNorm = {
+        x: clamp(params.cropBoxNorm.x, 0.01, 0.95),
+        y: clamp(params.cropBoxNorm.y, 0.01, 0.95),
+        w: clamp(params.cropBoxNorm.w, 0.04, 0.98),
+        h: clamp(params.cropBoxNorm.h, 0.04, 0.98),
+      };
+      ymin = Math.round(bboxNorm.y * 1000);
+      xmin = Math.round(bboxNorm.x * 1000);
+      ymax = Math.round((bboxNorm.y + bboxNorm.h) * 1000);
+      xmax = Math.round((bboxNorm.x + bboxNorm.w) * 1000);
+    }
+
+    const itemName = (item.name && String(item.name).trim()) || `辨識單品 ${idx + 1}`;
+    const keyword =
+      (item.searchKeywordZh && String(item.searchKeywordZh).trim()) || itemName;
+    const styleNote = (item.styleNote && String(item.styleNote).trim()) || '現代空間適配款';
+    const colorTone = (item.colorTone && String(item.colorTone).trim()) || '自然色系';
+    const matNote =
+      (item.materialNote && String(item.materialNote).trim()) ||
+      (params.petFriendly ? '防抓耐磨表面材質' : '質感實木／織品');
+
+    const matches = brandsOrder.slice(0, 3).map((brand, bIdx) => {
+      const priceFactor = bIdx === 0 ? 1 : bIdx === 1 ? 0.88 : 1.15;
+      const wVariant = Math.max(25, estW + (bIdx === 0 ? 0 : bIdx === 1 ? -4 : 3));
+      const dVariant = Math.max(25, estD + (bIdx === 0 ? 0 : bIdx === 1 ? -2 : 2));
+      const hVariant = estH;
+      const product: CatalogProduct = {
+        id: `ai-shop-${Date.now()}-${idx}-${bIdx}`,
+        brand,
+        sku: `TW-${cat.toUpperCase().slice(0, 4)}-${100 + idx * 10 + bIdx}`,
+        name: `${keyword}（${colorTone}）`,
+        category: cat,
+        widthCm: wVariant,
+        depthCm: dVariant,
+        heightCm: hVariant,
+        priceTWD: Math.round((basePrice * priceFactor) / 100) * 100,
+        material: `${matNote} · ${styleNote}`,
+        petScratchResistant: params.petFriendly || bIdx === 0,
+        styleAffinity: [params.activeStyle],
+        colorHex: '#C89F72',
+        urlHint: buildBrandShoppingSearchUrl(brand, keyword),
+        searchUrl: buildBrandShoppingSearchUrl(brand, keyword),
+      };
+
+      return {
+        product,
+        fitScore: Math.max(82, 97 - bIdx * 4),
+        dimDiffNote: `符合空間尺度（預留走道 ${params.walkwayCm}cm 無阻礙）`,
+      };
+    });
+
+    return {
+      slotId: `${params.cropBoxNorm ? 'manual-crop' : 'vlm-shop'}-${Date.now()}-${idx}`,
+      slotLabel: params.cropBoxNorm ? `手動框選：${itemName}` : itemName,
+      category: cat,
+      styleNote,
+      colorTone,
+      searchKeywordZh: keyword,
+      box2d: [ymin, xmin, ymax, xmax],
+      bboxNorm,
+      estimatedDimsCm: { w: estW, d: estD, h: estH },
+      matches,
+    };
+  });
+}
+

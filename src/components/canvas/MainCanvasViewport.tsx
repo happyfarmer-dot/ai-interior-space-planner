@@ -8,7 +8,10 @@ import {
   LayoutGrid,
   Loader2,
   Maximize2,
+  MessageSquarePlus,
+  Send,
   Upload,
+  XCircle,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -18,6 +21,7 @@ import { renderCompositeRoomCanvas } from '../../utils/imageProcessing';
 import { isNativeApp } from '../../utils/nativePlatform';
 import { BeforeAfterSlider } from './BeforeAfterSlider';
 import { CanvasOverlays } from './CanvasOverlays';
+import { CanvasToolbar } from './CanvasToolbar';
 import { FloorPlan2DView } from './FloorPlan2DView';
 
 export const MainCanvasViewport: React.FC = () => {
@@ -30,14 +34,18 @@ export const MainCanvasViewport: React.FC = () => {
     panOffset,
     setPanOffset,
     isAiBusy,
+    cancelAiGeneration,
     ergonomics,
     handleUploadCustomRoom,
     pickRoomPhotoNative,
+    conversationalHistory,
+    runConversationalEdit,
   } = useDesignStore();
 
   const {
     viewMode,
     activeMode,
+    currentStep,
     scene,
     styleConfig,
     materials,
@@ -57,6 +65,7 @@ export const MainCanvasViewport: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [mobileCollapsed, setMobileCollapsed] = useState(false);
+  const [chatPrompt, setChatPrompt] = useState('');
   const [stageSize, setStageSize] = useState<{ width: number; height: number }>({
     width: 880,
     height: 520,
@@ -128,31 +137,27 @@ export const MainCanvasViewport: React.FC = () => {
   const displayW = Math.max(180, Math.round(fitW));
   const displayH = Math.max(110, Math.round(fitH));
 
-  const toolBannerText =
-    activeTool === 'ruler'
-      ? '比例尺模式：按住並拖曳畫布上已知尺寸處（如門高 210cm）拉出校準線段'
-      : activeTool === 'brush_mask'
-      ? '筆刷遮罩模式：直接塗抹不可更動區域（窗戶、冷氣、配電箱），AI 將嚴格鎖定保護'
-      : activeTool === 'polygon_mask'
-      ? '多邊形遮罩模式：依序點擊頂點框選保護區域，點擊起點黃色圓點即可閉合完成'
-      : activeTool === 'material_pick'
-      ? '局部材質選取：點擊畫面中的地板、主牆面、沙發或窗簾區塊進行材質替換'
-      : activeTool === 'pan'
-      ? '平移模式：拖曳畫布移動視角，滾動滑鼠滾輪縮放'
-      : null;
-
   const handleViewChange = (mode: CanvasViewMode) => {
     dispatch({ type: 'SET_VIEW_MODE', viewMode: mode });
   };
 
   const hasPhoto = Boolean(scene.imageUrl);
+  const showConversationalBar = currentStep === 3 && hasPhoto && !mobileCollapsed;
+
+  const handleSendConversationalEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = chatPrompt.trim();
+    if (!trimmed || isAiBusy) return;
+    setChatPrompt('');
+    await runConversationalEdit(trimmed);
+  };
 
   return (
     <main
       className={`order-1 lg:order-2 sticky top-0 z-20 lg:static lg:z-auto flex w-full min-w-0 flex-col border-b border-[#232832] bg-[#0E1013] lg:flex-1 lg:border-b-0 lg:overflow-hidden transition-all duration-200 ${
         mobileCollapsed
           ? 'h-auto lg:h-full'
-          : 'h-[38vh] min-h-[250px] max-h-[400px] lg:h-full lg:min-h-0 lg:max-h-none'
+          : 'h-[44vh] min-h-[295px] max-h-[460px] lg:h-full lg:min-h-0 lg:max-h-none'
       }`}
     >
       {/* Hidden quick inputs for empty canvas upload buttons */}
@@ -284,13 +289,6 @@ export const MainCanvasViewport: React.FC = () => {
         </div>
       </div>
 
-      {/* Active Tool Guidance Banner */}
-      {toolBannerText && viewMode === 'perspective' && !mobileCollapsed && hasPhoto && (
-        <div className="z-10 flex shrink-0 items-center justify-center border-b border-[#C89F72]/30 bg-[#C89F72]/10 px-3 py-1 text-[11px] sm:text-xs text-[#F2D9BB] text-center">
-          {toolBannerText}
-        </div>
-      )}
-
       {/* Main Interactive Viewport Stage */}
       <div
         ref={stageContainerRef}
@@ -339,7 +337,7 @@ export const MainCanvasViewport: React.FC = () => {
               尚未匯入室內現況照片
             </p>
             <p className="mt-1 text-[11px] sm:text-xs text-slate-400">
-              請直接拍攝空間現場或從相簿／電腦上傳照片，系統將載入比例尺校準與 3D 透視圖層
+              請直接拍攝空間現場或從相簿／電腦上傳照片，系統將自動標準化長邊 1280px–1536px（≦300KB）並載入 3D 透視圖層
             </p>
             <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
               <button
@@ -390,21 +388,84 @@ export const MainCanvasViewport: React.FC = () => {
           </div>
         )}
 
-        {/* AI Processing Indicator Overlay */}
+        {/* AI Processing Indicator Overlay with Progress Bar & AbortController Cancel Button */}
         {isAiBusy && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/65 backdrop-blur-[2px]">
-            <div className="flex items-center gap-3 rounded-xl border border-[#C89F72]/50 bg-[#181B21] px-4 py-3 shadow-2xl mx-3 max-w-md">
-              <Loader2 className="h-5 w-5 animate-spin text-[#C89F72] shrink-0" />
-              <div>
-                <p className="text-xs sm:text-sm font-semibold text-slate-100">{isAiBusy}</p>
-                <p className="text-[11px] text-slate-400">
-                  正在連線 Google Gemini API 進行實景推理與渲染，請稍候...
-                </p>
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 backdrop-blur-[2px]">
+            <div className="flex w-full max-w-md flex-col gap-2.5 rounded-xl border border-[#C89F72]/50 bg-[#181B21] px-4 py-3.5 shadow-2xl mx-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Loader2 className="h-5 w-5 animate-spin text-[#C89F72] shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs sm:text-sm font-semibold text-slate-100 truncate">
+                      {isAiBusy}
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      正在連線 Google Gemini API（已啟用內容雜湊快取與防連點保護）
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={cancelAiGeneration}
+                  className="flex shrink-0 items-center gap-1 rounded-lg border border-rose-500/50 bg-rose-500/20 px-2.5 py-1 text-[11px] font-bold text-rose-200 hover:bg-rose-500/30 transition cursor-pointer"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                  取消生成
+                </button>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#242A34]">
+                <div className="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-[#C89F72] via-[#E2BE96] to-[#34D399]" />
               </div>
             </div>
           </div>
         )}
       </div>
+
+      {/* Multi-turn Conversational Local Editing Bar (Step 3 after simulation) */}
+      {showConversationalBar && (
+        <div className="z-20 shrink-0 border-t border-[#232832] bg-[#151921] px-2.5 sm:px-4 py-1.5">
+          <form onSubmit={handleSendConversationalEdit} className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 text-[11px] font-bold text-[#E2BE96] shrink-0">
+              <MessageSquarePlus className="h-3.5 w-3.5 text-[#C89F72]" />
+              <span className="hidden sm:inline">多輪對話局部微調：</span>
+              <span className="sm:hidden">局部微調：</span>
+            </div>
+            <input
+              type="text"
+              value={chatPrompt}
+              disabled={Boolean(isAiBusy)}
+              onChange={(e) => setChatPrompt(e.target.value)}
+              placeholder="例如：保留目前的沙發與木地板，只把左側的落地燈換成黑色極簡款式..."
+              className="min-w-0 flex-1 rounded-lg border border-[#2C3340] bg-[#0F1217] px-2.5 py-1 text-xs text-slate-100 placeholder-slate-500 focus:border-[#C89F72] focus:outline-none disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={Boolean(isAiBusy) || !chatPrompt.trim()}
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-[#C89F72] px-2.5 py-1 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 transition cursor-pointer"
+            >
+              <Send className="h-3 w-3" />
+              <span>微調送出</span>
+            </button>
+          </form>
+          {conversationalHistory.length > 0 && (
+            <div className="mt-1 flex items-center gap-1.5 overflow-x-auto pb-0.5 text-[10px] text-slate-400">
+              <span className="shrink-0 text-slate-500">已微調：</span>
+              {conversationalHistory.slice(-3).map((msg) => (
+                <span
+                  key={msg.id}
+                  className="shrink-0 rounded border border-emerald-500/30 bg-emerald-950/30 px-1.5 py-0.5 text-emerald-300"
+                  title={msg.resultNote}
+                >
+                  ✓ {msg.instruction}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Unified 7-Tool Canvas Bottom Toolbar with Chinese Labels, Gesture Hint Bar & ? Help Modal */}
+      {!mobileCollapsed && <CanvasToolbar />}
 
       {/* Bottom Spatial Telemetry Status Bar */}
       <footer

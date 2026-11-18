@@ -5,6 +5,7 @@ import React, {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -19,6 +20,7 @@ import { GeminiServiceError } from '../services/geminiClient';
 import type {
   ActiveCanvasTool,
   BomReport,
+  ConversationalEditMessage,
   ErgonomicsReport,
   ProtectionCategory,
   RoomScene,
@@ -26,7 +28,7 @@ import type {
 } from '../types/design';
 import { calculateBomReport } from '../utils/bomCalculator';
 import { evaluateErgonomics } from '../utils/ergonomics';
-import { autoRemoveWhiteBackground } from '../utils/imageProcessing';
+import { autoRemoveWhiteBackground, compressImageForAi } from '../utils/imageProcessing';
 import {
   configureNativeAppShell,
   listenAppRestoredPhoto,
@@ -67,11 +69,13 @@ interface DesignContextValue {
   panOffset: { x: number; y: number };
   setPanOffset: React.Dispatch<React.SetStateAction<{ x: number; y: number }>>;
   isAiBusy: string | null;
+  cancelAiGeneration: () => void;
   aiError: AiErrorBanner | null;
   clearAiError: () => void;
   geminiConfig: GeminiRuntimeConfig;
   showGeminiSettings: boolean;
   setShowGeminiSettings: (v: boolean) => void;
+  conversationalHistory: ConversationalEditMessage[];
   // Derived live reports
   ergonomics: ErgonomicsReport;
   bom: BomReport;
@@ -81,7 +85,7 @@ interface DesignContextValue {
   runParseConstraints: (
     freeText: string,
     tags: string[],
-    options?: { allowLocalFallback?: boolean }
+    options?: { allowLocalFallback?: boolean; fengShuiMode?: boolean }
   ) => Promise<void>;
   runGenerateProposals: () => Promise<void>;
   selectProposalWithAiRender: (proposalId: string) => Promise<void>;
@@ -96,22 +100,16 @@ interface DesignContextValue {
   ) => Promise<void>;
   runPlaceNewObjectWithAi: (zoneId: string) => Promise<void>;
   runAiRefineLightingMaterials: () => Promise<void>;
-  runVisualSearch: () => Promise<void>;
+  runConversationalEdit: (instruction: string) => Promise<void>;
+  runVisualSearch: (options?: {
+    cropBoxNorm?: { x: number; y: number; w: number; h: number };
+    forceRefresh?: boolean;
+  }) => Promise<void>;
   handleUploadCustomRoom: (file: File) => void;
   pickRoomPhotoNative: (source: 'camera' | 'photos') => Promise<void>;
 }
 
 const DesignContext = createContext<DesignContextValue | null>(null);
-
-function loadImageMeta(dataUrl: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () =>
-      resolve({ width: img.naturalWidth || 1280, height: img.naturalHeight || 720 });
-    img.onerror = () => resolve({ width: 1280, height: 720 });
-    img.src = dataUrl;
-  });
-}
 
 export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(designReducer, undefined, createInitialStoreState);
@@ -131,17 +129,54 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [geminiConfig, setGeminiConfig] = useState<GeminiRuntimeConfig>(getGeminiRuntimeConfig);
   const [showGeminiSettings, setShowGeminiSettings] = useState<boolean>(false);
   const [visualSearchResults, setVisualSearchResults] = useState<VisualSearchMatch[]>([]);
+  const [conversationalHistory, setConversationalHistory] = useState<ConversationalEditMessage[]>(
+    []
+  );
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const busyLockRef = useRef<boolean>(false);
+  const lastVisualSearchImageRef = useRef<string | null>(null);
 
   const { present } = state;
 
   const clearAiError = useCallback(() => setAiError(null), []);
 
+  const beginAiTask = useCallback((statusText: string): AbortSignal | null => {
+    if (busyLockRef.current) return null;
+    busyLockRef.current = true;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setIsAiBusy(statusText);
+    return controller.signal;
+  }, []);
+
+  const endAiTask = useCallback(() => {
+    busyLockRef.current = false;
+    abortControllerRef.current = null;
+    setIsAiBusy(null);
+  }, []);
+
+  const cancelAiGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    busyLockRef.current = false;
+    abortControllerRef.current = null;
+    setIsAiBusy(null);
+  }, []);
+
   const handleAiError = useCallback((err: unknown) => {
     if (err instanceof GeminiServiceError) {
+      if (err.code === 'ABORTED') {
+        return;
+      }
       setAiError({ message: err.message, needsKey: err.needsKey });
       if (err.needsKey) {
         setShowGeminiSettings(true);
       }
+      return;
+    }
+    if (err && typeof err === 'object' && 'name' in err && (err as { name?: string }).name === 'AbortError') {
       return;
     }
     setAiError({
@@ -178,16 +213,24 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [present.currentStep, showGeminiSettings]);
 
   const loadCustomRoomFromDataUrl = useCallback(
-    async (dataUrl: string, rawFileName: string, runVlmAutomatically = true) => {
-      const dims = await loadImageMeta(dataUrl);
+    async (fileOrDataUrl: File | string, rawFileName: string, runVlmAutomatically = true) => {
+      const compressed = await compressImageForAi(fileOrDataUrl, {
+        maxLongEdge: 1536,
+        minLongEdge: 1280,
+        quality: 0.85,
+        maxBytes: 300 * 1024,
+      });
+
       const customScene: RoomScene = {
         id: `custom-${Date.now()}`,
         name: rawFileName.replace(/\.[^/.]+$/, '') || '室內現況照片',
-        description: '已匯入室內現況照片，可使用比例尺校準並執行 Gemini AI 設計。',
+        description: `已標準化壓縮為 ${compressed.width}×${compressed.height}px (${Math.round(
+          compressed.byteSize / 1024
+        )}KB)，可使用比例尺校準並執行 Gemini AI 設計。`,
         sourceType: 'upload',
-        imageUrl: dataUrl,
-        imageWidth: dims.width,
-        imageHeight: dims.height,
+        imageUrl: compressed.dataUrl,
+        imageWidth: compressed.width,
+        imageHeight: compressed.height,
         roomDimensionsCm: { width: 380, depth: 450, height: 280 },
         areaPing: 5.2,
         windowSide: 'left',
@@ -231,7 +274,7 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           referenceCm: 210,
           lineStart: { x: 0.85, y: 0.12 },
           lineEnd: { x: 0.85, y: 0.88 },
-          pixelPerCm: Number(((dims.height * 0.76) / 210).toFixed(2)),
+          pixelPerCm: Number(((compressed.height * 0.76) / 210).toFixed(2)),
           showPerspectiveGrid: true,
           horizonY: 0.45,
           vanishingX: 0.5,
@@ -241,18 +284,23 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
 
       dispatch({ type: 'LOAD_SCENE', scene: customScene });
+      setVisualSearchResults([]);
+      setConversationalHistory([]);
+      lastVisualSearchImageRef.current = null;
       setZoom(1);
       setPanOffset({ x: 0, y: 0 });
       setAiError(null);
 
       if (runVlmAutomatically && hasGeminiApiKey()) {
-        setIsAiBusy('Gemini AI 正在辨識照片中的家具、尺寸與門窗冷氣位置...');
+        const signal = beginAiTask('Gemini AI 正在辨識照片中的家具、尺寸與門窗冷氣位置...');
+        if (!signal) return;
         try {
           const vlm = await aiPipeline.analyzeUploadedRoom({
-            imageUrl: dataUrl,
-            naturalWidth: dims.width,
-            naturalHeight: dims.height,
+            imageUrl: compressed.dataUrl,
+            naturalWidth: compressed.width,
+            naturalHeight: compressed.height,
             fallbackName: customScene.name,
+            signal,
           });
           dispatch({
             type: 'APPLY_VLM_SCENE_ANALYSIS',
@@ -272,11 +320,11 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         } catch (err) {
           handleAiError(err);
         } finally {
-          setIsAiBusy(null);
+          endAiTask();
         }
       }
     },
-    [handleAiError]
+    [beginAiTask, endAiTask, handleAiError]
   );
 
   // Restore camera photo if Android recycled the WebView Activity while camera app ran
@@ -292,20 +340,22 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, [loadCustomRoomFromDataUrl]);
 
-  // Derived real-time Ergonomics Check
+  // Derived real-time Ergonomics Check (with Taiwan Feng Shui check when enabled)
   const ergonomics = useMemo(
     () =>
       evaluateErgonomics(
         present.scene,
         present.furniture,
         present.protectionZones,
-        present.customPrompt.parsedJson.minWalkwayCm
+        present.customPrompt.parsedJson.minWalkwayCm,
+        Boolean(present.customPrompt.parsedJson.fengShuiMode)
       ),
     [
       present.scene,
       present.furniture,
       present.protectionZones,
       present.customPrompt.parsedJson.minWalkwayCm,
+      present.customPrompt.parsedJson.fengShuiMode,
     ]
   );
 
@@ -330,27 +380,6 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     ]
   );
 
-  // Keep Visual Search synchronized cleanly with furniture/style/constraints
-  useEffect(() => {
-    let cancelled = false;
-    aiPipeline
-      .visualSearchProducts(
-        present.furniture,
-        present.styleConfig.selectedStyleId,
-        present.customPrompt.parsedJson.petFriendly
-      )
-      .then((res) => {
-        if (!cancelled) setVisualSearchResults(res);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    present.furniture,
-    present.styleConfig.selectedStyleId,
-    present.customPrompt.parsedJson.petFriendly,
-  ]);
-
   // Desktop Undo/Redo keyboard shortcuts
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -371,14 +400,16 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const runDetectSceneVLM = useCallback(async () => {
     if (!present.scene.imageUrl) return;
+    const signal = beginAiTask('Gemini Vision AI 正在辨識照片中家具與結構／機電點位...');
+    if (!signal) return;
     setAiError(null);
-    setIsAiBusy('Gemini Vision AI 正在辨識照片中家具與結構／機電點位...');
     try {
       const vlm = await aiPipeline.analyzeUploadedRoom({
         imageUrl: present.scene.imageUrl,
         naturalWidth: present.scene.imageWidth,
         naturalHeight: present.scene.imageHeight,
         fallbackName: present.scene.name,
+        signal,
       });
       dispatch({
         type: 'APPLY_VLM_SCENE_ANALYSIS',
@@ -398,20 +429,30 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (err) {
       handleAiError(err);
     } finally {
-      setIsAiBusy(null);
+      endAiTask();
     }
-  }, [handleAiError, present.scene]);
+  }, [beginAiTask, endAiTask, handleAiError, present.scene]);
 
   const runParseConstraints = useCallback(
     async (
       freeText: string,
       tags: string[],
-      options?: { allowLocalFallback?: boolean }
+      options?: { allowLocalFallback?: boolean; fengShuiMode?: boolean }
     ) => {
+      const fengShuiMode =
+        options?.fengShuiMode !== undefined
+          ? options.fengShuiMode
+          : Boolean(present.customPrompt.parsedJson.fengShuiMode);
+
+      const signal = beginAiTask('Gemini AI 正在解析您的客製化裝潢約束條件...');
+      if (!signal) return;
       setAiError(null);
-      setIsAiBusy('Gemini AI 正在解析您的客製化裝潢約束條件...');
       try {
-        const parsed = await aiPipeline.parseDesignConstraints(freeText, tags, options);
+        const parsed = await aiPipeline.parseDesignConstraints(freeText, tags, {
+          allowLocalFallback: options?.allowLocalFallback,
+          fengShuiMode,
+          signal,
+        });
         dispatch({
           type: 'SET_CUSTOM_PROMPT',
           patch: {
@@ -425,10 +466,10 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (err) {
         handleAiError(err);
       } finally {
-        setIsAiBusy(null);
+        endAiTask();
       }
     },
-    [handleAiError]
+    [beginAiTask, endAiTask, handleAiError, present.customPrompt.parsedJson.fengShuiMode]
   );
 
   const runGenerateProposals = useCallback(async () => {
@@ -446,19 +487,20 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
 
-    setIsAiBusy('Gemini 空間設計引擎規劃多組配置並進行真實室景重排繪製中...');
+    const signal = beginAiTask('Gemini 空間設計引擎規劃多組配置並進行真實室景重排繪製中...');
+    if (!signal) return;
     try {
       let activeFurniture = present.furniture;
       let activeProtection = present.protectionZones;
       let activeScene = present.scene;
 
-      // Auto-run VLM identification first if no movable furniture has been mapped yet
       if (activeFurniture.length === 0) {
         const vlm = await aiPipeline.analyzeUploadedRoom({
           imageUrl: present.scene.imageUrl,
           naturalWidth: present.scene.imageWidth,
           naturalHeight: present.scene.imageHeight,
           fallbackName: present.scene.name,
+          signal,
         });
         dispatch({
           type: 'APPLY_VLM_SCENE_ANALYSIS',
@@ -476,7 +518,10 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           },
         });
         activeFurniture = vlm.furniture;
-        activeProtection = [...present.protectionZones.filter((z) => !z.autoDetected), ...vlm.protectionZones];
+        activeProtection = [
+          ...present.protectionZones.filter((z) => !z.autoDetected),
+          ...vlm.protectionZones,
+        ];
         activeScene = {
           ...present.scene,
           name: vlm.sceneName,
@@ -492,7 +537,11 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       const parsed = await aiPipeline.parseDesignConstraints(
         present.customPrompt.freeText,
-        present.customPrompt.selectedTags
+        present.customPrompt.selectedTags,
+        {
+          fengShuiMode: Boolean(present.customPrompt.parsedJson.fengShuiMode),
+          signal,
+        }
       );
       dispatch({
         type: 'SET_CUSTOM_PROMPT',
@@ -505,7 +554,8 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         activeFurniture,
         activeProtection,
         parsed,
-        present.lighting
+        present.lighting,
+        signal
       );
 
       dispatch({ type: 'SET_PROPOSALS', proposals });
@@ -517,9 +567,11 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (err) {
       handleAiError(err);
     } finally {
-      setIsAiBusy(null);
+      endAiTask();
     }
   }, [
+    beginAiTask,
+    endAiTask,
     handleAiError,
     present.customPrompt,
     present.furniture,
@@ -536,15 +588,17 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       if (chosen.aiRenderedImageUrl) return;
 
+      const signal = beginAiTask(`Gemini AI 正在實景重繪「${chosen.title}」配置圖...`);
+      if (!signal) return;
       setAiError(null);
-      setIsAiBusy(`Gemini AI 正在實景重繪「${chosen.title}」配置圖...`);
       try {
         const res = await aiPipeline.renderRearrangedProposalImage(
           present.scene,
           chosen,
           present.protectionZones,
           present.customPrompt.parsedJson,
-          present.lighting
+          present.lighting,
+          signal
         );
         dispatch({
           type: 'CACHE_PROPOSAL_IMAGE',
@@ -555,10 +609,12 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (err) {
         handleAiError(err);
       } finally {
-        setIsAiBusy(null);
+        endAiTask();
       }
     },
     [
+      beginAiTask,
+      endAiTask,
       handleAiError,
       present.customPrompt.parsedJson,
       present.lighting,
@@ -584,7 +640,8 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     const effectiveIntensity = present.styleConfig.intensity > 0 ? present.styleConfig.intensity : 88;
-    setIsAiBusy('Gemini AI 圖像引擎正在進行風格重繪與材質光影融合...');
+    const signal = beginAiTask('Gemini AI 圖像引擎正在進行風格重繪與材質光影融合...');
+    if (!signal) return;
     try {
       const res = await aiPipeline.generateStyleTransferImage({
         scene: present.scene,
@@ -594,6 +651,7 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         constraints: present.customPrompt.parsedJson,
         lighting: present.lighting,
         materials: present.materials,
+        signal,
       });
 
       dispatch({
@@ -617,9 +675,11 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (err) {
       handleAiError(err);
     } finally {
-      setIsAiBusy(null);
+      endAiTask();
     }
   }, [
+    beginAiTask,
+    endAiTask,
     handleAiError,
     present.customPrompt.parsedJson,
     present.lighting,
@@ -639,10 +699,17 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       heightCm: number,
       threshold = 40
     ) => {
+      const signal = beginAiTask('執行單品標準化壓縮、自動去背，並呼叫 Gemini 空間分析推薦最佳擺放區...');
+      if (!signal) return;
       setAiError(null);
-      setIsAiBusy('執行單品自動去背，並呼叫 Gemini 空間分析推薦 1～3 個最佳擺放區...');
       try {
-        const cutoutUrl = await autoRemoveWhiteBackground(sourceUrl, threshold);
+        const compressedObj = await compressImageForAi(sourceUrl, {
+          maxLongEdge: 1280,
+          minLongEdge: 960,
+          quality: 0.85,
+          maxBytes: 300 * 1024,
+        });
+        const cutoutUrl = await autoRemoveWhiteBackground(compressedObj.dataUrl, threshold);
         const zones = await aiPipeline.analyzeObjectPlacementZones(
           present.scene,
           itemName,
@@ -650,12 +717,13 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           depthCm,
           heightCm,
           present.protectionZones,
-          present.furniture
+          present.furniture,
+          signal
         );
         dispatch({
           type: 'SET_NEW_OBJECT',
           patch: {
-            sourceUrl,
+            sourceUrl: compressedObj.dataUrl,
             cutoutUrl,
             itemName,
             widthCm,
@@ -672,10 +740,10 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (err) {
         handleAiError(err);
       } finally {
-        setIsAiBusy(null);
+        endAiTask();
       }
     },
-    [handleAiError, present.furniture, present.protectionZones, present.scene]
+    [beginAiTask, endAiTask, handleAiError, present.furniture, present.protectionZones, present.scene]
   );
 
   const runPlaceNewObjectWithAi = useCallback(
@@ -684,9 +752,12 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const itemImg = present.newObject.cutoutUrl || present.newObject.sourceUrl;
       if (!zone || !present.scene.imageUrl || !itemImg) return;
 
+      const signal = beginAiTask(
+        `Gemini AI 正在將「${present.newObject.itemName}」依透視比例合成至實景圖中...`
+      );
+      if (!signal) return;
       dispatch({ type: 'PLACE_NEW_OBJECT_AT_ZONE', zoneId });
       setAiError(null);
-      setIsAiBusy(`Gemini AI 正在將「${present.newObject.itemName}」依透視比例合成至實景圖中...`);
       try {
         const baseImageUrl =
           present.aiRenderedImageUrl &&
@@ -706,6 +777,7 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           zone,
           constraints: present.customPrompt.parsedJson,
           lighting: present.lighting,
+          signal,
         });
 
         dispatch({
@@ -720,10 +792,12 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       } catch (err) {
         handleAiError(err);
       } finally {
-        setIsAiBusy(null);
+        endAiTask();
       }
     },
     [
+      beginAiTask,
+      endAiTask,
       handleAiError,
       present.aiRenderMode,
       present.aiRenderedImageUrl,
@@ -736,8 +810,9 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const runAiRefineLightingMaterials = useCallback(async () => {
     if (!present.scene.imageUrl) return;
+    const signal = beginAiTask('Gemini AI 正在依目前色溫與局部材質重繪空間實景圖...');
+    if (!signal) return;
     setAiError(null);
-    setIsAiBusy('Gemini AI 正在依目前色溫與局部材質重繪空間實景圖...');
     try {
       const baseImageUrl =
         present.aiRenderedImageUrl && present.aiRenderMode !== 'refine'
@@ -752,6 +827,7 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         materials: present.materials,
         protectionZones: present.protectionZones,
         constraints: present.customPrompt.parsedJson,
+        signal,
       });
 
       dispatch({
@@ -765,9 +841,11 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (err) {
       handleAiError(err);
     } finally {
-      setIsAiBusy(null);
+      endAiTask();
     }
   }, [
+    beginAiTask,
+    endAiTask,
     handleAiError,
     present.aiRenderMode,
     present.aiRenderedImageUrl,
@@ -778,33 +856,162 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     present.scene,
   ]);
 
-  const runVisualSearch = useCallback(async () => {
-    setIsAiBusy('比對台灣主流家居規格資料庫...');
-    try {
-      const res = await aiPipeline.visualSearchProducts(
-        present.furniture,
-        present.styleConfig.selectedStyleId,
-        present.customPrompt.parsedJson.petFriendly
+  const runConversationalEdit = useCallback(
+    async (instruction: string) => {
+      const trimmed = instruction.trim();
+      if (!trimmed || !present.scene.imageUrl) return;
+
+      if (!hasGeminiApiKey()) {
+        handleAiError(
+          new GeminiServiceError(
+            'MISSING_KEY',
+            '請先設定 Gemini API Key，才能執行多輪對話式局部微調。',
+            true
+          )
+        );
+        return;
+      }
+
+      const signal = beginAiTask(`Gemini 多模態局部微調中：「${trimmed.slice(0, 26)}」...`);
+      if (!signal) return;
+      setAiError(null);
+      try {
+        const baseImageUrl = present.aiRenderedImageUrl || present.scene.imageUrl;
+        const res = await aiPipeline.conversationalEditImage({
+          baseImageUrl,
+          imageWidth: present.scene.imageWidth,
+          imageHeight: present.scene.imageHeight,
+          instruction: trimmed,
+          history: conversationalHistory.map((m) => m.instruction),
+          protectionZones: present.protectionZones,
+          lighting: present.lighting,
+          signal,
+        });
+
+        dispatch({
+          type: 'SET_AI_RENDER',
+          imageUrl: res.imageUrl,
+          mode: 'refine',
+          description: res.description,
+          recordHistory: true,
+        });
+        setConversationalHistory((prev) => [
+          ...prev,
+          {
+            id: `chat-${Date.now()}`,
+            instruction: trimmed,
+            createdAt: new Date().toLocaleTimeString('zh-TW', {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+            resultNote: res.description,
+            fromCache: res.fromCache,
+          },
+        ]);
+      } catch (err) {
+        handleAiError(err);
+      } finally {
+        endAiTask();
+      }
+    },
+    [
+      beginAiTask,
+      conversationalHistory,
+      endAiTask,
+      handleAiError,
+      present.aiRenderedImageUrl,
+      present.lighting,
+      present.protectionZones,
+      present.scene,
+    ]
+  );
+
+  const runVisualSearch = useCallback(
+    async (options?: {
+      cropBoxNorm?: { x: number; y: number; w: number; h: number };
+      forceRefresh?: boolean;
+    }) => {
+      const targetImage = present.aiRenderedImageUrl || present.scene.imageUrl;
+      if (!targetImage) return;
+
+      if (!hasGeminiApiKey()) {
+        handleAiError(
+          new GeminiServiceError(
+            'MISSING_KEY',
+            '請先設定 Gemini API Key，才能對模擬圖進行視覺物件偵測與購買連結推薦。',
+            true
+          )
+        );
+        return;
+      }
+
+      const signal = beginAiTask(
+        options?.cropBoxNorm
+          ? 'Gemini Vision 正在辨識您手動框選的單品與尺寸...'
+          : 'Gemini Vision 正在掃描模擬圖中出現的傢俱與燈飾並比對台灣購買通路...'
       );
-      setVisualSearchResults(res);
-      setShowVisualSearchOverlay(true);
-    } finally {
-      setIsAiBusy(null);
+      if (!signal) return;
+      setAiError(null);
+      try {
+        const res = await aiPipeline.detectPurchasableItems({
+          imageUrl: targetImage,
+          pixelPerCm: present.calibration.pixelPerCm,
+          walkwayCm: ergonomics.mainWalkwayCm,
+          roomDimensionsCm: present.scene.roomDimensionsCm,
+          activeStyle: present.styleConfig.selectedStyleId,
+          petFriendly: present.customPrompt.parsedJson.petFriendly,
+          cropBoxNorm: options?.cropBoxNorm,
+          forceRefresh: options?.forceRefresh,
+          signal,
+        });
+
+        if (options?.cropBoxNorm && res.length > 0) {
+          setVisualSearchResults((prev) => [res[0], ...prev]);
+          setSelectedFurnitureId(res[0].slotId);
+        } else {
+          setVisualSearchResults(res);
+          setSelectedFurnitureId(res[0]?.slotId ?? null);
+          lastVisualSearchImageRef.current = targetImage;
+        }
+        setShowVisualSearchOverlay(true);
+      } catch (err) {
+        handleAiError(err);
+      } finally {
+        endAiTask();
+      }
+    },
+    [
+      beginAiTask,
+      endAiTask,
+      ergonomics.mainWalkwayCm,
+      handleAiError,
+      present.aiRenderedImageUrl,
+      present.calibration.pixelPerCm,
+      present.customPrompt.parsedJson.petFriendly,
+      present.scene.imageUrl,
+      present.scene.roomDimensionsCm,
+      present.styleConfig.selectedStyleId,
+    ]
+  );
+
+  // Auto-detect purchasable items when entering Step 4 if a rendered/room photo and API key exist
+  useEffect(() => {
+    const targetImage = present.aiRenderedImageUrl || present.scene.imageUrl;
+    if (
+      present.currentStep === 4 &&
+      targetImage &&
+      hasGeminiApiKey() &&
+      !busyLockRef.current &&
+      lastVisualSearchImageRef.current !== targetImage
+    ) {
+      lastVisualSearchImageRef.current = targetImage;
+      runVisualSearch();
     }
-  }, [
-    present.furniture,
-    present.styleConfig.selectedStyleId,
-    present.customPrompt.parsedJson.petFriendly,
-  ]);
+  }, [present.currentStep, present.aiRenderedImageUrl, present.scene.imageUrl, runVisualSearch]);
 
   const handleUploadCustomRoom = useCallback(
     (file: File) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result as string;
-        loadCustomRoomFromDataUrl(dataUrl, file.name, true);
-      };
-      reader.readAsDataURL(file);
+      loadCustomRoomFromDataUrl(file, file.name, true);
     },
     [loadCustomRoomFromDataUrl]
   );
@@ -850,11 +1057,13 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     panOffset,
     setPanOffset,
     isAiBusy,
+    cancelAiGeneration,
     aiError,
     clearAiError,
     geminiConfig,
     showGeminiSettings,
     setShowGeminiSettings,
+    conversationalHistory,
     ergonomics,
     bom,
     visualSearchResults,
@@ -866,6 +1075,7 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     runPrepareNewObject,
     runPlaceNewObjectWithAi,
     runAiRefineLightingMaterials,
+    runConversationalEdit,
     runVisualSearch,
     handleUploadCustomRoom,
     pickRoomPhotoNative,

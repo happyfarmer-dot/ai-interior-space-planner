@@ -4,6 +4,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Columns2,
+  Compass,
   LampCeiling,
   Layers,
   LayoutGrid,
@@ -50,6 +51,7 @@ export const Step3RefineInspectPanel: React.FC = () => {
     state,
     dispatch,
     ergonomics,
+    isAiBusy,
     setActiveTool,
     runGenerateProposals,
     selectProposalWithAiRender,
@@ -71,8 +73,10 @@ export const Step3RefineInspectPanel: React.FC = () => {
   } = state.present;
 
   const hasPhoto = Boolean(scene.imageUrl);
+  const busy = Boolean(isAiBusy);
   const activeTarget: SurfaceTarget = materials.activeTarget ?? 'floor';
   const surfaceMaterials = getMaterialsByTarget(activeTarget);
+  const fengShuiEnabled = Boolean(customPrompt.parsedJson.fengShuiMode);
 
   return (
     <div className="space-y-4">
@@ -97,7 +101,7 @@ export const Step3RefineInspectPanel: React.FC = () => {
               {proposals.length === 0 && (
                 <button
                   type="button"
-                  disabled={!hasPhoto}
+                  disabled={!hasPhoto || busy}
                   onClick={runGenerateProposals}
                   className="rounded bg-[#C89F72]/20 px-2 py-0.5 text-[11px] font-medium text-[#E2BE96] disabled:opacity-40 cursor-pointer"
                 >
@@ -114,7 +118,9 @@ export const Step3RefineInspectPanel: React.FC = () => {
               return (
                 <div
                   key={p.id}
-                  onClick={() => selectProposalWithAiRender(p.id)}
+                  onClick={() => {
+                    if (!busy) selectProposalWithAiRender(p.id);
+                  }}
                   className={`rounded-lg border p-2.5 transition cursor-pointer ${
                     selected
                       ? 'border-[#C89F72] bg-[#C89F72]/10'
@@ -190,7 +196,7 @@ export const Step3RefineInspectPanel: React.FC = () => {
           </div>
           <button
             type="button"
-            disabled={!hasPhoto}
+            disabled={!hasPhoto || busy}
             onClick={runApplyStyleTransfer}
             className="flex w-full items-center justify-center gap-1.5 rounded-md border border-[#C89F72]/40 bg-[#C89F72]/10 py-1.5 text-[11px] font-semibold text-[#E2BE96] hover:bg-[#C89F72]/20 disabled:opacity-40 cursor-pointer"
           >
@@ -299,6 +305,55 @@ export const Step3RefineInspectPanel: React.FC = () => {
             </ul>
           )}
         </div>
+
+        {/* 台灣傳統風水避讓檢測與化煞建議（當功能 7 風水開關啟用時顯示） */}
+        {fengShuiEnabled && ergonomics.fengShuiChecks && ergonomics.fengShuiChecks.length > 0 && (
+          <div className="space-y-2 rounded-lg border border-amber-400/40 bg-amber-500/5 p-2.5">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-xs font-bold text-amber-200">
+                <Compass className="h-3.5 w-3.5 text-amber-300" />
+                台灣傳統風水檢測與化煞建議
+              </span>
+              <span className="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200">
+                已啟用風水避讓
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              {ergonomics.fengShuiChecks.map((fs) => (
+                <div
+                  key={fs.ruleId}
+                  className={`rounded-md border p-2 text-[11px] ${LIGHT_BORDER[fs.status]}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 font-bold text-slate-100">
+                      <span className={`h-2 w-2 rounded-full ${LIGHT_DOT[fs.status]}`} />
+                      {fs.title}
+                    </span>
+                    <span
+                      className={`text-[10px] font-semibold ${
+                        fs.status === 'green'
+                          ? 'text-emerald-300'
+                          : fs.status === 'yellow'
+                          ? 'text-amber-300'
+                          : 'text-rose-300'
+                      }`}
+                    >
+                      {fs.status === 'green'
+                        ? '格局吉順'
+                        : fs.status === 'yellow'
+                        ? '建議化煞'
+                        : '建議調整'}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-slate-300">{fs.finding}</p>
+                  <p className="mt-1 text-[10.5px] text-amber-200/90">
+                    💡 化解建議：{fs.remedy}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* 功能 9｜自然採光時段與人工照明色溫模擬 */}
@@ -513,7 +568,7 @@ export const Step3RefineInspectPanel: React.FC = () => {
 
         <button
           type="button"
-          disabled={!hasPhoto}
+          disabled={!hasPhoto || busy}
           onClick={runAiRefineLightingMaterials}
           className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
         >

@@ -47,11 +47,195 @@ export interface EncodedInlineImage {
   aspectRatio: string;
 }
 
+export interface CompressedImageResult {
+  dataUrl: string;
+  width: number;
+  height: number;
+  byteSize: number;
+}
+
+function estimateBase64Bytes(dataUrl: string): number {
+  const comma = dataUrl.indexOf(',');
+  const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+  return Math.round((b64.length * 3) / 4);
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function renderScaledJpeg(
+  source: ImageBitmap | HTMLImageElement,
+  srcW: number,
+  srcH: number,
+  maxLongEdge: number,
+  quality: number
+): Promise<CompressedImageResult> {
+  const scale = Math.min(1, maxLongEdge / Math.max(1, srcW, srcH));
+  const w = Math.max(1, Math.round(srcW * scale));
+  const h = Math.max(1, Math.round(srcH * scale));
+
+  if (typeof OffscreenCanvas !== 'undefined') {
+    try {
+      const offscreen = new OffscreenCanvas(w, h);
+      const ctx = offscreen.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(source, 0, 0, w, h);
+        const blob = await offscreen.convertToBlob({ type: 'image/jpeg', quality });
+        const dataUrl = await blobToDataUrl(blob);
+        return { dataUrl, width: w, height: h, byteSize: blob.size };
+      }
+    } catch {
+      // Fallback to regular HTMLCanvasElement below
+    }
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('無法初始化影像壓縮畫布');
+  }
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(source, 0, 0, w, h);
+  const dataUrl = canvas.toDataURL('image/jpeg', quality);
+  return {
+    dataUrl,
+    width: w,
+    height: h,
+    byteSize: estimateBase64Bytes(dataUrl),
+  };
+}
+
+/**
+ * Standardizes uploaded or camera-captured images via OffscreenCanvas:
+ * - Scales long edge to 1280px–1536px
+ * - Encodes as JPEG (initial quality 0.85)
+ * - Steps down to 1280px / slightly lower quality if needed so byte size stays <= 300KB
+ */
+export async function compressImageForAi(
+  input: File | Blob | string,
+  options?: {
+    maxLongEdge?: number;
+    minLongEdge?: number;
+    quality?: number;
+    maxBytes?: number;
+  }
+): Promise<CompressedImageResult> {
+  const maxLong = options?.maxLongEdge ?? 1536;
+  const minLong = options?.minLongEdge ?? 1280;
+  const baseQuality = options?.quality ?? 0.85;
+  const maxBytes = options?.maxBytes ?? 300 * 1024;
+
+  let source: ImageBitmap | HTMLImageElement | null = null;
+  let srcW = 1280;
+  let srcH = 720;
+
+  try {
+    if (typeof input !== 'string' && typeof createImageBitmap === 'function') {
+      try {
+        const bmp = await createImageBitmap(input);
+        source = bmp;
+        srcW = Math.max(1, bmp.width);
+        srcH = Math.max(1, bmp.height);
+      } catch {
+        source = null;
+      }
+    }
+
+    if (!source) {
+      const url = typeof input === 'string' ? input : await blobToDataUrl(input);
+      const img = await loadImageCached(url);
+      source = img;
+      srcW = Math.max(1, img.naturalWidth || 1280);
+      srcH = Math.max(1, img.naturalHeight || 720);
+    }
+
+    const attempts: Array<{ edge: number; q: number }> = [
+      { edge: maxLong, q: baseQuality },
+      { edge: Math.round((maxLong + minLong) / 2), q: 0.82 },
+      { edge: minLong, q: 0.78 },
+      { edge: minLong, q: 0.7 },
+      { edge: 1120, q: 0.65 },
+    ];
+
+    let result: CompressedImageResult | null = null;
+    for (const attempt of attempts) {
+      result = await renderScaledJpeg(source, srcW, srcH, attempt.edge, attempt.q);
+      if (result.byteSize <= maxBytes) {
+        break;
+      }
+    }
+
+    if (!result) {
+      throw new Error('影像壓縮失敗');
+    }
+    imageCache.delete(result.dataUrl);
+    return result;
+  } finally {
+    if (source && typeof ImageBitmap !== 'undefined' && source instanceof ImageBitmap) {
+      source.close();
+    }
+  }
+}
+
+export async function cropNormalizedImageRegion(
+  imageUrl: string,
+  boxNorm: { x: number; y: number; w: number; h: number }
+): Promise<string> {
+  const img = await loadImageCached(imageUrl);
+  const natW = Math.max(1, img.naturalWidth || 1024);
+  const natH = Math.max(1, img.naturalHeight || 768);
+  const sx = Math.max(0, Math.min(natW - 4, Math.round(boxNorm.x * natW)));
+  const sy = Math.max(0, Math.min(natH - 4, Math.round(boxNorm.y * natH)));
+  const sw = Math.max(16, Math.min(natW - sx, Math.round(boxNorm.w * natW)));
+  const sh = Math.max(16, Math.min(natH - sy, Math.round(boxNorm.h * natH)));
+
+  const scale = Math.min(1, 768 / Math.max(sw, sh));
+  const dw = Math.max(16, Math.round(sw * scale));
+  const dh = Math.max(16, Math.round(sh * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = dw;
+  canvas.height = dh;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return imageUrl;
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+  return canvas.toDataURL('image/jpeg', 0.85);
+}
+
 export async function urlToInlineImagePart(
   url: string,
-  maxDim = 1280,
+  maxDim = 1360,
   preferPng = false
 ): Promise<EncodedInlineImage> {
+  if (!preferPng) {
+    const compressed = await compressImageForAi(url, {
+      maxLongEdge: Math.min(1536, Math.max(1280, maxDim)),
+      minLongEdge: 1280,
+      quality: 0.85,
+      maxBytes: 300 * 1024,
+    });
+    const commaIdx = compressed.dataUrl.indexOf(',');
+    const base64 = commaIdx >= 0 ? compressed.dataUrl.slice(commaIdx + 1) : compressed.dataUrl;
+    return {
+      mimeType: 'image/jpeg',
+      data: base64,
+      width: compressed.width,
+      height: compressed.height,
+      aspectRatio: matchGeminiAspectRatio(compressed.width, compressed.height),
+    };
+  }
+
   const img = await loadImageCached(url);
   const natW = Math.max(1, img.naturalWidth || 1024);
   const natH = Math.max(1, img.naturalHeight || 768);
@@ -68,13 +252,12 @@ export async function urlToInlineImagePart(
   }
   ctx.drawImage(img, 0, 0, w, h);
 
-  const mimeType: 'image/jpeg' | 'image/png' = preferPng ? 'image/png' : 'image/jpeg';
-  const dataUrl = preferPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.86);
+  const dataUrl = canvas.toDataURL('image/png');
   const commaIdx = dataUrl.indexOf(',');
   const base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
 
   return {
-    mimeType,
+    mimeType: 'image/png',
     data: base64,
     width: w,
     height: h,

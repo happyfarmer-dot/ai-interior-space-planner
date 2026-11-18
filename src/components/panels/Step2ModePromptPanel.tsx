@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import {
   ArrowRight,
   Box,
+  Compass,
   Cpu,
   KeyRound,
   LayoutTemplate,
@@ -34,6 +35,7 @@ export const Step2ModePromptPanel: React.FC = () => {
     dispatch,
     geminiConfig,
     setShowGeminiSettings,
+    isAiBusy,
     runDetectSceneVLM,
     runParseConstraints,
     runGenerateProposals,
@@ -48,13 +50,34 @@ export const Step2ModePromptPanel: React.FC = () => {
   const itemFileRef = useRef<HTMLInputElement | null>(null);
   const hasPhoto = Boolean(scene.imageUrl);
   const geminiReady = Boolean(geminiConfig.apiKey.trim());
+  const busy = Boolean(isAiBusy);
+  const fengShuiEnabled = Boolean(customPrompt.parsedJson.fengShuiMode);
 
   const toggleTag = (tag: string) => {
     const next = localTags.includes(tag)
       ? localTags.filter((t) => t !== tag)
       : [...localTags, tag];
     setLocalTags(next);
-    runParseConstraints(localText, next, { allowLocalFallback: !geminiReady });
+    runParseConstraints(localText, next, {
+      allowLocalFallback: !geminiReady,
+      fengShuiMode: fengShuiEnabled,
+    });
+  };
+
+  const handleToggleFengShui = (enabled: boolean) => {
+    dispatch({
+      type: 'SET_CUSTOM_PROMPT',
+      patch: {
+        parsedJson: {
+          ...customPrompt.parsedJson,
+          fengShuiMode: enabled,
+        },
+      },
+    });
+    runParseConstraints(localText, localTags, {
+      allowLocalFallback: true,
+      fengShuiMode: enabled,
+    });
   };
 
   const handleUploadObjectImage = (file: File) => {
@@ -173,8 +196,9 @@ export const Step2ModePromptPanel: React.FC = () => {
               {hasPhoto && (
                 <button
                   type="button"
+                  disabled={busy}
                   onClick={runDetectSceneVLM}
-                  className="flex items-center gap-1 text-[10.5px] text-sky-400 hover:underline cursor-pointer"
+                  className="flex items-center gap-1 text-[10.5px] text-sky-400 hover:underline disabled:opacity-40 cursor-pointer"
                 >
                   <RefreshCw className="h-3 w-3" />
                   重新掃描照片家具
@@ -206,7 +230,7 @@ export const Step2ModePromptPanel: React.FC = () => {
 
           <button
             type="button"
-            disabled={!hasPhoto}
+            disabled={!hasPhoto || busy}
             onClick={runGenerateProposals}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
           >
@@ -293,7 +317,7 @@ export const Step2ModePromptPanel: React.FC = () => {
 
           <button
             type="button"
-            disabled={!hasPhoto}
+            disabled={!hasPhoto || busy}
             onClick={runApplyStyleTransfer}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
           >
@@ -312,8 +336,9 @@ export const Step2ModePromptPanel: React.FC = () => {
             </h3>
             <button
               type="button"
+              disabled={busy}
               onClick={handlePickObjectNativeOrWeb}
-              className="flex items-center gap-1 rounded border border-[#C89F72]/40 bg-[#C89F72]/10 px-2 py-0.5 text-[11px] text-[#E2BE96] hover:bg-[#C89F72]/20 cursor-pointer"
+              className="flex items-center gap-1 rounded border border-[#C89F72]/40 bg-[#C89F72]/10 px-2 py-0.5 text-[11px] text-[#E2BE96] hover:bg-[#C89F72]/20 disabled:opacity-40 cursor-pointer"
             >
               <Upload className="h-3 w-3" />
               上傳單品照
@@ -338,7 +363,7 @@ export const Step2ModePromptPanel: React.FC = () => {
                 <button
                   key={item.id}
                   type="button"
-                  disabled={!hasPhoto}
+                  disabled={!hasPhoto || busy}
                   onClick={() =>
                     runPrepareNewObject(
                       item.imageUrl,
@@ -464,7 +489,7 @@ export const Step2ModePromptPanel: React.FC = () => {
 
           <button
             type="button"
-            disabled={!hasPhoto || !newObject.sourceUrl}
+            disabled={!hasPhoto || !newObject.sourceUrl || busy}
             onClick={() => {
               if (newObject.sourceUrl) {
                 runPrepareNewObject(
@@ -494,8 +519,9 @@ export const Step2ModePromptPanel: React.FC = () => {
                   <button
                     key={zone.id}
                     type="button"
+                    disabled={busy}
                     onClick={() => runPlaceNewObjectWithAi(zone.id)}
-                    className={`w-full rounded-lg border p-2 text-left transition cursor-pointer ${
+                    className={`w-full rounded-lg border p-2 text-left transition disabled:opacity-40 cursor-pointer ${
                       selected
                         ? 'border-emerald-400 bg-emerald-500/15'
                         : 'border-[#2B313C] bg-[#13161B] hover:border-[#C89F72]'
@@ -521,6 +547,51 @@ export const Step2ModePromptPanel: React.FC = () => {
             功能 7｜客製化裝潢需求設定
           </h3>
           <Cpu className="h-3.5 w-3.5 text-sky-400" />
+        </div>
+
+        {/* 台灣傳統風水避讓開關（預設關閉） */}
+        <div
+          className={`rounded-lg border p-2.5 transition ${
+            fengShuiEnabled
+              ? 'border-amber-400/60 bg-amber-500/10'
+              : 'border-[#2B313C] bg-[#13161B]'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Compass
+                className={`h-4 w-4 shrink-0 ${
+                  fengShuiEnabled ? 'text-amber-300' : 'text-slate-400'
+                }`}
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-100">
+                  台灣傳統風水避讓開關
+                </p>
+                <p className="text-[10.5px] text-slate-400">
+                  {fengShuiEnabled
+                    ? '已開啟：重排與檢測將避開「開門見灶、穿堂煞、橫樑壓床、鏡對床鋪」並提供屏風化煞建議'
+                    : '預設關閉：完全依現代空間美學與機能動線配置，不套用風水限制'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={fengShuiEnabled}
+              aria-label="台灣傳統風水避讓開關"
+              onClick={() => handleToggleFengShui(!fengShuiEnabled)}
+              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition cursor-pointer ${
+                fengShuiEnabled ? 'bg-amber-400' : 'bg-[#2C3340]'
+              }`}
+            >
+              <span
+                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-[#111315] transition ${
+                  fengShuiEnabled ? 'translate-x-4' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-1.5">
@@ -553,8 +624,13 @@ export const Step2ModePromptPanel: React.FC = () => {
 
         <button
           type="button"
-          onClick={() => runParseConstraints(localText, localTags)}
-          className="w-full rounded-md border border-sky-500/40 bg-sky-500/10 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/20 transition cursor-pointer"
+          disabled={busy}
+          onClick={() =>
+            runParseConstraints(localText, localTags, {
+              fengShuiMode: fengShuiEnabled,
+            })
+          }
+          className="w-full rounded-md border border-sky-500/40 bg-sky-500/10 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/20 disabled:opacity-40 transition cursor-pointer"
         >
           Gemini AI 解析為結構化約束條件（JSON）
         </button>

@@ -1,8 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FileJson, FileSpreadsheet, Printer, X } from 'lucide-react';
+import { FileJson, FileSpreadsheet, HardHat, Printer, X } from 'lucide-react';
 import { getMaterialById } from '../../data/materialsCatalog';
 import { getStyleById } from '../../data/stylesCatalog';
 import { useDesignStore } from '../../store/useDesignStore';
+import {
+  downloadConstructionBlueprintPng,
+  renderConstructionBlueprintDataUrl,
+} from '../../utils/constructionAnnotation';
 import { downloadBomCsv, downloadDesignJson, shareHtmlProposalOnNative } from '../../utils/exportUtils';
 import { renderCompositeRoomCanvas } from '../../utils/imageProcessing';
 import { isNativeApp } from '../../utils/nativePlatform';
@@ -24,6 +28,7 @@ export const ProposalPdfModal: React.FC<{
     aiRenderMode,
   } = state.present;
   const [generatedDate] = useState(() => new Date().toLocaleDateString('zh-TW'));
+  const [blueprintDataUrl, setBlueprintDataUrl] = useState<string>('');
 
   const afterPreviewRef = useRef<HTMLCanvasElement | null>(null);
   const autoPrintedRef = useRef(false);
@@ -67,11 +72,18 @@ export const ProposalPdfModal: React.FC<{
           aiRenderMode,
         });
       }
+      if (scene.imageUrl) {
+        const bpUrl = await renderConstructionBlueprintDataUrl({
+          state: state.present,
+          ergonomics,
+        }).catch(() => '');
+        setBlueprintDataUrl(bpUrl);
+      }
       if (autoPrintOnOpen && !autoPrintedRef.current && !isNativeApp()) {
         autoPrintedRef.current = true;
         timer = setTimeout(() => {
           window.print();
-        }, 350);
+        }, 420);
       }
     };
     renderAndMaybePrint();
@@ -81,14 +93,13 @@ export const ProposalPdfModal: React.FC<{
     };
   }, [
     autoPrintOnOpen,
-    state.present.activeMode,
+    state.present,
+    ergonomics,
     scene,
     styleConfig,
     materials,
     lighting,
-    state.present.furniture,
     calibration,
-    state.present.selectedProposalId,
     aiRenderedImageUrl,
     aiRenderMode,
   ]);
@@ -113,10 +124,10 @@ export const ProposalPdfModal: React.FC<{
           <div className="flex items-start justify-between gap-2">
             <div>
               <h2 className="text-sm font-bold text-slate-900">
-                室內空間設計與預算企劃書預覽（A4 列印 / PDF）
+                室內空間設計與預算企劃書預覽（A4 列印 / PDF 含工班施工標註圖）
               </h2>
               <p className="text-xs text-slate-500">
-                包含 Before / After 對比圖、物理工學檢測、BOM 明細與免責聲明
+                包含 Before / After 對比圖、工班尺寸與機電標註圖、物理工學檢測、BOM 明細與免責聲明
               </p>
             </div>
             <button
@@ -129,6 +140,21 @@ export const ProposalPdfModal: React.FC<{
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            {scene.imageUrl && (
+              <button
+                type="button"
+                onClick={() =>
+                  downloadConstructionBlueprintPng({
+                    state: state.present,
+                    ergonomics,
+                  })
+                }
+                className="flex items-center gap-1.5 rounded-lg border border-amber-400 bg-amber-50 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100 cursor-pointer"
+              >
+                <HardHat className="h-3.5 w-3.5 text-amber-700" />
+                下載施工標註圖 PNG
+              </button>
+            )}
             <button
               type="button"
               onClick={() => downloadBomCsv(bom, scene.name)}
@@ -217,6 +243,25 @@ export const ProposalPdfModal: React.FC<{
             </div>
           </div>
 
+          {/* Contractor Construction & MEP Dimension Blueprint Image */}
+          {blueprintDataUrl && (
+            <div className="print-break-inside-avoid rounded-xl border-2 border-slate-300 bg-slate-50 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                  ★ 工班現場施工與機電尺寸標註圖（含比例尺、走道淨寬、機電紅框警示與材質引線）
+                </h3>
+                <span className="text-[11px] font-mono-num text-slate-500">
+                  比例尺：{calibration.pixelPerCm} px/cm
+                </span>
+              </div>
+              <img
+                src={blueprintDataUrl}
+                alt="工班施工標註圖"
+                className="w-full rounded-lg border border-slate-300 object-contain"
+              />
+            </div>
+          )}
+
           {/* Constraints & Ergonomics Verification */}
           <div className="print-break-inside-avoid grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -269,6 +314,11 @@ export const ProposalPdfModal: React.FC<{
                 <li>
                   • 沙發與窗簾：{sofaMat?.name ?? '原沙發'} / {curtainMat?.name ?? '原窗簾'}
                 </li>
+                {customPrompt.parsedJson.fengShuiMode && (
+                  <li className="text-amber-800">
+                    • 台灣傳統風水避讓：已開啟（避開開門見灶、穿堂煞、橫樑壓床、鏡對床鋪）
+                  </li>
+                )}
                 {customPrompt.parsedJson.notes.length > 0 && (
                   <li className="text-amber-800">
                     • 客製約束：{customPrompt.parsedJson.notes[0]}

@@ -15,7 +15,8 @@ import { doesRectIntersectDoorSwing, getItemFootprintRect, rectsOverlap } from '
 
 export function parseConstraintsMock(
   freeText: string,
-  selectedTags: string[]
+  selectedTags: string[],
+  fengShuiMode = false
 ): ParsedDesignConstraints {
   const combined = `${selectedTags.join(' ')} ${freeText}`.trim();
 
@@ -33,6 +34,7 @@ export function parseConstraintsMock(
 
   const petFriendly = /貓|狗|寵物|防抓|耐磨/.test(combined);
   const catTreeRequired = /貓跳台|貓爬架|兩隻貓|養貓/.test(combined);
+  const resolvedFengShui = fengShuiMode || /風水|穿堂煞|橫樑壓床|開門見灶/.test(combined);
 
   const preserveItems: string[] = [];
   if (/實木餐桌|原木餐桌|保留餐桌/.test(combined)) preserveItems.push('原有實木餐桌');
@@ -73,6 +75,9 @@ export function parseConstraintsMock(
   if (petFriendly) {
     notes.push('啟動寵物友善約束：材質庫與商品檢索將自動標記耐抓防水材質');
   }
+  if (resolvedFengShui) {
+    notes.push('已啟用台灣傳統風水避讓：自動檢核開門見灶、穿堂煞、橫樑壓床與鏡子對床並提供屏風化解建議');
+  }
   if (preserveItems.length > 0) {
     notes.push(`已鎖定保留原有家具：${preserveItems.join('、')}`);
   }
@@ -84,6 +89,7 @@ export function parseConstraintsMock(
     maxBudgetTWD,
     petFriendly,
     catTreeRequired,
+    fengShuiMode: resolvedFengShui,
     preserveItems,
     minWalkwayCm,
     requiredZones,

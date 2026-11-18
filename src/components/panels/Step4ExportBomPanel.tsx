@@ -4,14 +4,18 @@ import {
   BookmarkPlus,
   Check,
   Copy,
+  Crop,
   Download,
   ExternalLink,
   FileSpreadsheet,
+  HardHat,
   Printer,
+  RefreshCw,
   ScanSearch,
   ShoppingBag,
 } from 'lucide-react';
 import { useDesignStore } from '../../store/useDesignStore';
+import { downloadConstructionBlueprintPng } from '../../utils/constructionAnnotation';
 import {
   copyTextToClipboard,
   downloadBomCsv,
@@ -29,6 +33,9 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
     dispatch,
     bom,
     ergonomics,
+    isAiBusy,
+    activeTool,
+    setActiveTool,
     visualSearchResults,
     showVisualSearchOverlay,
     setShowVisualSearchOverlay,
@@ -40,6 +47,11 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
   const { scene, customPrompt } = state.present;
   const [copyToast, setCopyToast] = useState<'idle' | 'copied' | 'error'>('idle');
   const [fallbackReportText, setFallbackReportText] = useState<string | null>(null);
+  const [blueprintPreviewUrl, setBlueprintPreviewUrl] = useState<string | null>(null);
+  const [generatingBlueprint, setGeneratingBlueprint] = useState(false);
+
+  const hasPhoto = Boolean(scene.imageUrl);
+  const busy = Boolean(isAiBusy);
 
   useEffect(() => {
     if (copyToast === 'idle') return;
@@ -76,42 +88,101 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
     setCopyToast('error');
   };
 
+  const handleGenerateBlueprint = async () => {
+    if (!hasPhoto || generatingBlueprint) return;
+    setGeneratingBlueprint(true);
+    try {
+      const url = await downloadConstructionBlueprintPng({
+        state: state.present,
+        ergonomics,
+      });
+      if (url) {
+        setBlueprintPreviewUrl(url);
+      }
+    } finally {
+      setGeneratingBlueprint(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      {/* 功能 11｜軟裝單品以圖搜物推薦 */}
+      {/* 功能 11｜模擬圖傢俱採購清單（幫你找哪裡買） */}
       <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <ShoppingBag className="h-4 w-4 text-sky-400 shrink-0" />
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
-              功能 11｜軟裝單品以圖搜物推薦
-            </h3>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <ShoppingBag className="h-4 w-4 text-sky-400 shrink-0" />
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
+                功能 11｜模擬圖傢俱採購清單（幫你找哪裡買）
+              </h3>
+            </div>
           </div>
+          <p className="text-[11px] leading-relaxed text-slate-400">
+            自動辨識模擬圖中出現的傢俱與燈飾，或點擊「手動框選物件」在畫面上框出你想買的單品，系統將依空間尺寸幫你尋找實體商品與購買連結。
+          </p>
+        </div>
+
+        {/* Action Toolbar: 重新辨識 / 手動框選物件 / 顯示或隱藏框選 */}
+        <div className="grid grid-cols-3 gap-1.5">
           <button
             type="button"
+            disabled={!hasPhoto || busy}
+            onClick={() => {
+              dispatch({ type: 'SET_VIEW_MODE', viewMode: 'perspective' });
+              void runVisualSearch({ forceRefresh: true });
+            }}
+            className="flex items-center justify-center gap-1 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2 py-1.5 text-[11px] font-bold text-sky-200 hover:bg-sky-500/25 disabled:opacity-40 transition cursor-pointer"
+          >
+            <RefreshCw className={`h-3 w-3 ${busy ? 'animate-spin' : ''}`} />
+            重新辨識
+          </button>
+          <button
+            type="button"
+            disabled={!hasPhoto || busy}
+            onClick={() => {
+              dispatch({ type: 'SET_VIEW_MODE', viewMode: 'perspective' });
+              setShowVisualSearchOverlay(true);
+              setActiveTool(
+                activeTool === 'manual_box_select' ? 'select' : 'manual_box_select'
+              );
+            }}
+            className={`flex items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-bold transition disabled:opacity-40 cursor-pointer ${
+              activeTool === 'manual_box_select'
+                ? 'border-amber-400 bg-amber-400 text-slate-950 shadow'
+                : 'border-[#C89F72]/50 bg-[#C89F72]/15 text-[#E2BE96] hover:bg-[#C89F72]/25'
+            }`}
+          >
+            <Crop className="h-3 w-3" />
+            {activeTool === 'manual_box_select' ? '請在畫布拉框...' : '手動框選物件'}
+          </button>
+          <button
+            type="button"
+            disabled={!hasPhoto}
             onClick={() => {
               if (!showVisualSearchOverlay) {
-                runVisualSearch();
                 dispatch({ type: 'SET_VIEW_MODE', viewMode: 'perspective' });
+                setShowVisualSearchOverlay(true);
               } else {
                 setShowVisualSearchOverlay(false);
               }
             }}
-            className={`flex items-center gap-1 shrink-0 rounded px-2 py-0.5 text-[11px] font-medium border transition cursor-pointer ${
+            className={`flex items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition disabled:opacity-40 cursor-pointer ${
               showVisualSearchOverlay
                 ? 'border-sky-400 bg-sky-500/20 text-sky-200'
                 : 'border-[#2B313C] bg-[#13161B] text-slate-300 hover:border-sky-400/50'
             }`}
           >
             <ScanSearch className="h-3 w-3" />
-            {showVisualSearchOverlay ? '隱藏框選' : '畫布框選'}
+            {showVisualSearchOverlay ? '隱藏藍框' : '顯示藍框'}
           </button>
         </div>
 
         {/* Detected Item Slot Tabs */}
         {visualSearchResults.length === 0 ? (
           <p className="rounded border border-dashed border-[#2C3340] p-3 text-center text-[11px] text-slate-400">
-            尚未偵測可比對之軟裝單品，請先於「功能 1」匯入空間照片或於「功能 6」置入家具物件。
+            {hasPhoto
+              ? '正在準備或尚未偵測到傢俱單品，請點擊上方「重新辨識」或「手動框選物件」由 Gemini Vision 自動拆解單品與台灣品牌採購連結。'
+              : '請先於「功能 1」匯入空間照片，系統將自動辨識模擬圖中的傢俱與燈飾並提供台灣通路購買連結。'}
           </p>
         ) : (
           <>
@@ -122,7 +193,10 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
                   <button
                     key={vs.slotId}
                     type="button"
-                    onClick={() => setSelectedFurnitureId(vs.slotId)}
+                    onClick={() => {
+                      setSelectedFurnitureId(vs.slotId);
+                      setShowVisualSearchOverlay(true);
+                    }}
                     className={`rounded-md border px-2 py-1 text-[11px] font-medium transition cursor-pointer ${
                       active
                         ? 'border-sky-400 bg-sky-500/15 text-sky-200'
@@ -147,40 +221,55 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
                   )}
                 </div>
 
-                {activeSearchSlot.matches.map((m) => (
-                  <div
-                    key={m.product.id}
-                    className="rounded-lg border border-[#272D38] bg-[#13161B] p-2.5 space-y-1"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-slate-100">
-                            {m.product.brand}
-                          </span>
-                          <span className="text-xs font-semibold text-slate-100">
-                            {m.product.name}
-                          </span>
+                {activeSearchSlot.matches.map((m) => {
+                  const targetUrl = m.product.searchUrl || m.product.urlHint;
+                  return (
+                    <div
+                      key={m.product.id}
+                      className="rounded-lg border border-[#272D38] bg-[#13161B] p-2.5 space-y-1.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-slate-100">
+                              {m.product.brand}
+                            </span>
+                            <span className="text-xs font-semibold text-slate-100">
+                              {m.product.name}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-[10.5px] text-slate-400">
+                            {m.product.material}
+                          </p>
                         </div>
-                        <p className="mt-0.5 text-[10.5px] text-slate-400">{m.product.material}</p>
+                        <span className="shrink-0 font-mono-num text-xs font-bold text-[#E2BE96]">
+                          NT$ {m.product.priceTWD.toLocaleString()}
+                        </span>
                       </div>
-                      <span className="shrink-0 font-mono-num text-xs font-bold text-[#E2BE96]">
-                        NT$ {m.product.priceTWD.toLocaleString()}
-                      </span>
-                    </div>
 
-                    <div className="flex items-center justify-between pt-1 text-[10.5px]">
-                      <span className="text-sky-300">
-                        {m.product.widthCm}×{m.product.depthCm}×{m.product.heightCm}cm ·{' '}
-                        {m.dimDiffNote}
-                      </span>
-                      <span className="flex items-center gap-1 shrink-0 font-mono-num text-emerald-400">
-                        匹配 {m.fitScore}%
-                        <ExternalLink className="h-3 w-3 opacity-70" />
-                      </span>
+                      <div className="flex items-center justify-between gap-2 pt-1 text-[10.5px]">
+                        <span className="text-sky-300">
+                          {m.product.widthCm}×{m.product.depthCm}×{m.product.heightCm}cm ·{' '}
+                          {m.dimDiffNote}
+                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-mono-num text-emerald-400">
+                            匹配 {m.fitScore}%
+                          </span>
+                          <a
+                            href={targetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-md border border-[#C89F72]/60 bg-[#C89F72]/20 px-2 py-0.5 text-[11px] font-bold text-[#F3DEC3] hover:bg-[#C89F72]/35 transition"
+                          >
+                            <span>搜尋購買 ↗</span>
+                            <ExternalLink className="h-2.5 w-2.5" />
+                          </a>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </>
@@ -319,15 +408,48 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
             </h3>
           </div>
           <span className="rounded-full bg-[#C89F72]/15 px-2 py-0.5 text-[10px] font-medium text-[#E2BE96]">
-            行動裝置適用
+            工班溝通＆行動裝置適用
           </span>
         </div>
 
         <p className="text-[11px] leading-relaxed text-slate-400">
-          提供 Excel / CSV 明細報表、完整 A4 企劃書列印 PDF 與純文字版本，方便快速傳送至 LINE 與家人或設計師討論。
+          提供工班施工標註圖（高解析 PNG）、Excel / CSV 明細報表、完整 A4 企劃書列印 PDF 與純文字版本，方便直接傳送給統包師傅或家人討論。
         </p>
 
         <div className="space-y-2">
+          {/* 0. One-click Contractor Construction Annotation Blueprint PNG */}
+          <button
+            type="button"
+            disabled={!hasPhoto || generatingBlueprint}
+            onClick={handleGenerateBlueprint}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-amber-400/55 bg-amber-500/15 py-2.5 px-3 text-xs font-bold text-amber-200 hover:bg-amber-500/25 disabled:opacity-40 transition cursor-pointer"
+          >
+            <HardHat className="h-4 w-4 text-amber-300 shrink-0" />
+            {generatingBlueprint
+              ? '正在合成尺寸線與機電紅框警示標註圖...'
+              : '一鍵生成工班施工標註圖（下載高解析 PNG）'}
+          </button>
+
+          {blueprintPreviewUrl && (
+            <div className="rounded-lg border border-amber-400/40 bg-[#11141A] p-2 space-y-1.5">
+              <div className="flex items-center justify-between text-[10.5px] text-amber-200">
+                <span>✓ 已生成工班施工標註圖（含比例尺、走道淨寬、機電紅框與材質引線）</span>
+                <a
+                  href={blueprintPreviewUrl}
+                  download={`工班施工標註圖_${scene.name.replace(/\s+/g, '_')}.png`}
+                  className="underline font-bold"
+                >
+                  再次下載 PNG
+                </a>
+              </div>
+              <img
+                src={blueprintPreviewUrl}
+                alt="工班施工標註圖預覽"
+                className="w-full rounded border border-white/10 object-contain max-h-48"
+              />
+            </div>
+          )}
+
           {/* 1. Download Excel / CSV (UTF-8 BOM) */}
           <button
             type="button"
@@ -345,7 +467,7 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 px-3 text-xs font-bold text-[#111315] shadow hover:bg-[#D8B084] transition cursor-pointer"
           >
             <Printer className="h-4 w-4 shrink-0" />
-            一鍵匯出完整設計與預算企劃書（列印 / PDF）
+            一鍵匯出完整設計與預算企劃書（列印 / PDF 含施工標註圖）
           </button>
 
           {/* 3. Copy Plain Text Budget Breakdown */}
@@ -398,3 +520,4 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
     </div>
   );
 };
+

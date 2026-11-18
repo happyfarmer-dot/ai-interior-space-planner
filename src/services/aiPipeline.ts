@@ -10,18 +10,21 @@ import type {
   StyleId,
   VisualSearchMatch,
 } from '../types/design';
-import { getAIServiceConfig, hasGeminiApiKey } from './aiConfig';
+import { buildAiCacheKey, getAiCacheEntry, setAiCacheEntry } from './aiCache';
+import { getAIServiceConfig, getGeminiRuntimeConfig, hasGeminiApiKey } from './aiConfig';
 import {
   analyzeObjectZonesWithGemini,
   analyzeUploadedRoomWithGemini,
   compositeNewObjectWithGemini,
+  conversationalEditWithGemini,
+  detectPurchasableItemsWithGemini,
   generateRearrangementPlanWithGemini,
   parseConstraintsWithGemini,
+  refineLightingAndMaterialsWithGemini,
   renderRearrangedRoomImageWithGemini,
   renderStyleTransferWithGemini,
-  refineLightingAndMaterialsWithGemini,
 } from './geminiClient';
-import { parseConstraintsMock, visualSearchMock } from './mockAiEngine';
+import { parseConstraintsMock } from './mockAiEngine';
 
 export interface IAIPipelineService {
   readonly modeLabel: string;
@@ -31,6 +34,7 @@ export interface IAIPipelineService {
     naturalWidth: number;
     naturalHeight: number;
     fallbackName?: string;
+    signal?: AbortSignal;
   }): Promise<{
     sceneName: string;
     description: string;
@@ -42,26 +46,29 @@ export interface IAIPipelineService {
     furniture: FurnitureItem[];
     protectionZones: ProtectionZone[];
     surfacePolygons: RoomScene['surfacePolygons'];
+    fromCache?: boolean;
   }>;
   parseDesignConstraints(
     freeText: string,
     selectedTags: string[],
-    options?: { allowLocalFallback?: boolean }
+    options?: { allowLocalFallback?: boolean; fengShuiMode?: boolean; signal?: AbortSignal }
   ): Promise<ParsedDesignConstraints>;
   generateRearrangementProposals(
     scene: RoomScene,
     furniture: FurnitureItem[],
     protectionZones: ProtectionZone[],
     constraints: ParsedDesignConstraints,
-    lighting: LightingConfig
+    lighting: LightingConfig,
+    signal?: AbortSignal
   ): Promise<RearrangementProposal[]>;
   renderRearrangedProposalImage(
     scene: RoomScene,
     proposal: RearrangementProposal,
     protectionZones: ProtectionZone[],
     constraints: ParsedDesignConstraints,
-    lighting: LightingConfig
-  ): Promise<{ imageUrl: string; description: string }>;
+    lighting: LightingConfig,
+    signal?: AbortSignal
+  ): Promise<{ imageUrl: string; description: string; fromCache?: boolean }>;
   generateStyleTransferImage(params: {
     scene: RoomScene;
     styleId: StyleId;
@@ -70,7 +77,8 @@ export interface IAIPipelineService {
     constraints: ParsedDesignConstraints;
     lighting: LightingConfig;
     materials: MaterialOverrides;
-  }): Promise<{ imageUrl: string; description: string }>;
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string; description: string; fromCache?: boolean }>;
   analyzeObjectPlacementZones(
     scene: RoomScene,
     itemName: string,
@@ -78,7 +86,8 @@ export interface IAIPipelineService {
     depthCm: number,
     heightCm: number,
     protectionZones: ProtectionZone[],
-    existingFurniture: FurnitureItem[]
+    existingFurniture: FurnitureItem[],
+    signal?: AbortSignal
   ): Promise<HighlightZone[]>;
   compositeNewObjectImage(params: {
     baseImageUrl: string;
@@ -92,7 +101,8 @@ export interface IAIPipelineService {
     zone: HighlightZone;
     constraints: ParsedDesignConstraints;
     lighting: LightingConfig;
-  }): Promise<{ imageUrl: string; description: string }>;
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string; description: string; fromCache?: boolean }>;
   refineLightingAndMaterials(params: {
     baseImageUrl: string;
     imageWidth: number;
@@ -101,12 +111,29 @@ export interface IAIPipelineService {
     materials: MaterialOverrides;
     protectionZones: ProtectionZone[];
     constraints: ParsedDesignConstraints;
-  }): Promise<{ imageUrl: string; description: string }>;
-  visualSearchProducts(
-    furniture: FurnitureItem[],
-    activeStyle: StyleId,
-    petFriendly: boolean
-  ): Promise<VisualSearchMatch[]>;
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string; description: string; fromCache?: boolean }>;
+  conversationalEditImage(params: {
+    baseImageUrl: string;
+    imageWidth: number;
+    imageHeight: number;
+    instruction: string;
+    history: string[];
+    protectionZones: ProtectionZone[];
+    lighting: LightingConfig;
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string; description: string; fromCache?: boolean }>;
+  detectPurchasableItems(params: {
+    imageUrl: string;
+    pixelPerCm: number;
+    walkwayCm: number;
+    roomDimensionsCm: { width: number; depth: number; height: number };
+    activeStyle: StyleId;
+    petFriendly: boolean;
+    cropBoxNorm?: { x: number; y: number; w: number; h: number };
+    forceRefresh?: boolean;
+    signal?: AbortSignal;
+  }): Promise<VisualSearchMatch[]>;
 }
 
 class GeminiInteriorAIService implements IAIPipelineService {
@@ -119,59 +146,126 @@ class GeminiInteriorAIService implements IAIPipelineService {
     return cfg.mode === 'live' ? `Gemini AI (${cfg.imageModel})` : '尚未設定 Gemini Key';
   }
 
-  analyzeUploadedRoom(params: {
+  async analyzeUploadedRoom(params: {
     imageUrl: string;
     naturalWidth: number;
     naturalHeight: number;
     fallbackName?: string;
+    signal?: AbortSignal;
   }) {
-    return analyzeUploadedRoomWithGemini(params);
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('vlm_scene', params.imageUrl, {
+      visionModel: cfg.visionModel,
+      w: params.naturalWidth,
+      h: params.naturalHeight,
+    });
+    const cached = getAiCacheEntry<Awaited<ReturnType<typeof analyzeUploadedRoomWithGemini>>>(cacheKey);
+    if (cached) {
+      return { ...cached, fromCache: true };
+    }
+    const res = await analyzeUploadedRoomWithGemini(params);
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 
   async parseDesignConstraints(
     freeText: string,
     selectedTags: string[],
-    options?: { allowLocalFallback?: boolean }
+    options?: { allowLocalFallback?: boolean; fengShuiMode?: boolean; signal?: AbortSignal }
   ): Promise<ParsedDesignConstraints> {
     if (!hasGeminiApiKey() && options?.allowLocalFallback) {
-      return parseConstraintsMock(freeText, selectedTags);
+      return parseConstraintsMock(freeText, selectedTags, Boolean(options?.fengShuiMode));
     }
-    return parseConstraintsWithGemini(freeText, selectedTags);
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('parse_constraints', 'text_only', {
+      visionModel: cfg.visionModel,
+      freeText: freeText.trim(),
+      selectedTags: [...selectedTags].sort(),
+      fengShuiMode: Boolean(options?.fengShuiMode),
+    });
+    const cached = getAiCacheEntry<ParsedDesignConstraints>(cacheKey);
+    if (cached) return cached;
+
+    const res = await parseConstraintsWithGemini(freeText, selectedTags, {
+      fengShuiMode: options?.fengShuiMode,
+      signal: options?.signal,
+    });
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 
-  generateRearrangementProposals(
+  async generateRearrangementProposals(
     scene: RoomScene,
     furniture: FurnitureItem[],
     protectionZones: ProtectionZone[],
     constraints: ParsedDesignConstraints,
-    lighting: LightingConfig
+    lighting: LightingConfig,
+    signal?: AbortSignal
   ): Promise<RearrangementProposal[]> {
-    return generateRearrangementPlanWithGemini({
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('rearrange_proposals', scene.imageUrl, {
+      visionModel: cfg.visionModel,
+      imageModel: cfg.imageModel,
+      furnitureIds: furniture.map((f) => `${f.id}:${f.widthCm}x${f.depthCm}`),
+      lockedZones: protectionZones.filter((z) => z.locked).map((z) => z.category),
+      minWalkwayCm: constraints.minWalkwayCm,
+      petFriendly: constraints.petFriendly,
+      fengShuiMode: Boolean(constraints.fengShuiMode),
+      kelvin: lighting.kelvin,
+    });
+    const cached = getAiCacheEntry<RearrangementProposal[]>(cacheKey);
+    if (cached) return cached;
+
+    const res = await generateRearrangementPlanWithGemini({
       scene,
       furniture,
       protectionZones,
       constraints,
       lighting,
+      signal,
     });
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 
-  renderRearrangedProposalImage(
+  async renderRearrangedProposalImage(
     scene: RoomScene,
     proposal: RearrangementProposal,
     protectionZones: ProtectionZone[],
     constraints: ParsedDesignConstraints,
-    lighting: LightingConfig
-  ): Promise<{ imageUrl: string; description: string }> {
-    return renderRearrangedRoomImageWithGemini({
+    lighting: LightingConfig,
+    signal?: AbortSignal
+  ): Promise<{ imageUrl: string; description: string; fromCache?: boolean }> {
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('render_proposal', scene.imageUrl, {
+      imageModel: cfg.imageModel,
+      title: proposal.title,
+      moves: proposal.furnitureLayout.map((f) => `${f.id}:${f.topDownPosCm.x},${f.topDownPosCm.y}`),
+      kelvin: lighting.kelvin,
+      fengShuiMode: Boolean(constraints.fengShuiMode),
+    });
+    const cached = getAiCacheEntry<{ imageUrl: string; description: string }>(cacheKey);
+    if (cached) {
+      return {
+        imageUrl: cached.imageUrl,
+        description: `${cached.description}（已讀取本地快取）`,
+        fromCache: true,
+      };
+    }
+
+    const res = await renderRearrangedRoomImageWithGemini({
       scene,
       proposal,
       protectionZones,
       constraints,
       lighting,
+      signal,
     });
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 
-  generateStyleTransferImage(params: {
+  async generateStyleTransferImage(params: {
     scene: RoomScene;
     styleId: StyleId;
     intensity: number;
@@ -179,20 +273,60 @@ class GeminiInteriorAIService implements IAIPipelineService {
     constraints: ParsedDesignConstraints;
     lighting: LightingConfig;
     materials: MaterialOverrides;
-  }): Promise<{ imageUrl: string; description: string }> {
-    return renderStyleTransferWithGemini(params);
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string; description: string; fromCache?: boolean }> {
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('style_transfer', params.scene.imageUrl, {
+      imageModel: cfg.imageModel,
+      styleId: params.styleId,
+      intensity: params.intensity,
+      lockedZones: params.protectionZones.filter((z) => z.locked).map((z) => z.category),
+      petFriendly: params.constraints.petFriendly,
+      fengShuiMode: Boolean(params.constraints.fengShuiMode),
+      kelvin: params.lighting.kelvin,
+      sunPreset: params.lighting.sunPreset,
+      floor: params.materials.floor,
+      wall: params.materials.wall,
+      sofa: params.materials.sofa,
+      curtain: params.materials.curtain,
+    });
+    const cached = getAiCacheEntry<{ imageUrl: string; description: string }>(cacheKey);
+    if (cached) {
+      return {
+        imageUrl: cached.imageUrl,
+        description: `${cached.description}（已讀取本地快取）`,
+        fromCache: true,
+      };
+    }
+
+    const res = await renderStyleTransferWithGemini(params);
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 
-  analyzeObjectPlacementZones(
+  async analyzeObjectPlacementZones(
     scene: RoomScene,
     itemName: string,
     widthCm: number,
     depthCm: number,
     heightCm: number,
     protectionZones: ProtectionZone[],
-    existingFurniture: FurnitureItem[]
+    existingFurniture: FurnitureItem[],
+    signal?: AbortSignal
   ): Promise<HighlightZone[]> {
-    return analyzeObjectZonesWithGemini({
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('object_zones', scene.imageUrl, {
+      visionModel: cfg.visionModel,
+      itemName,
+      widthCm,
+      depthCm,
+      heightCm,
+      lockedCount: protectionZones.filter((z) => z.locked).length,
+    });
+    const cached = getAiCacheEntry<HighlightZone[]>(cacheKey);
+    if (cached) return cached;
+
+    const res = await analyzeObjectZonesWithGemini({
       scene,
       itemName,
       widthCm,
@@ -200,10 +334,13 @@ class GeminiInteriorAIService implements IAIPipelineService {
       heightCm,
       protectionZones,
       existingFurniture,
+      signal,
     });
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 
-  compositeNewObjectImage(params: {
+  async compositeNewObjectImage(params: {
     baseImageUrl: string;
     imageWidth: number;
     imageHeight: number;
@@ -215,11 +352,34 @@ class GeminiInteriorAIService implements IAIPipelineService {
     zone: HighlightZone;
     constraints: ParsedDesignConstraints;
     lighting: LightingConfig;
-  }): Promise<{ imageUrl: string; description: string }> {
-    return compositeNewObjectWithGemini(params);
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string; description: string; fromCache?: boolean }> {
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('composite_object', params.baseImageUrl, {
+      imageModel: cfg.imageModel,
+      itemName: params.itemName,
+      w: params.widthCm,
+      d: params.depthCm,
+      h: params.heightCm,
+      anchorX: params.zone.imageAnchor.x,
+      anchorY: params.zone.imageAnchor.y,
+      kelvin: params.lighting.kelvin,
+    });
+    const cached = getAiCacheEntry<{ imageUrl: string; description: string }>(cacheKey);
+    if (cached) {
+      return {
+        imageUrl: cached.imageUrl,
+        description: `${cached.description}（已讀取本地快取）`,
+        fromCache: true,
+      };
+    }
+
+    const res = await compositeNewObjectWithGemini(params);
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 
-  refineLightingAndMaterials(params: {
+  async refineLightingAndMaterials(params: {
     baseImageUrl: string;
     imageWidth: number;
     imageHeight: number;
@@ -227,16 +387,93 @@ class GeminiInteriorAIService implements IAIPipelineService {
     materials: MaterialOverrides;
     protectionZones: ProtectionZone[];
     constraints: ParsedDesignConstraints;
-  }): Promise<{ imageUrl: string; description: string }> {
-    return refineLightingAndMaterialsWithGemini(params);
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string; description: string; fromCache?: boolean }> {
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('refine_light_mat', params.baseImageUrl, {
+      imageModel: cfg.imageModel,
+      sunPreset: params.lighting.sunPreset,
+      kelvin: params.lighting.kelvin,
+      recessed: params.lighting.recessedDownlights,
+      cove: params.lighting.indirectCoveLight,
+      floor: params.materials.floor,
+      wall: params.materials.wall,
+      sofa: params.materials.sofa,
+      curtain: params.materials.curtain,
+    });
+    const cached = getAiCacheEntry<{ imageUrl: string; description: string }>(cacheKey);
+    if (cached) {
+      return {
+        imageUrl: cached.imageUrl,
+        description: `${cached.description}（已讀取本地快取）`,
+        fromCache: true,
+      };
+    }
+
+    const res = await refineLightingAndMaterialsWithGemini(params);
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 
-  async visualSearchProducts(
-    furniture: FurnitureItem[],
-    activeStyle: StyleId,
-    petFriendly: boolean
-  ): Promise<VisualSearchMatch[]> {
-    return visualSearchMock(furniture, activeStyle, petFriendly);
+  async conversationalEditImage(params: {
+    baseImageUrl: string;
+    imageWidth: number;
+    imageHeight: number;
+    instruction: string;
+    history: string[];
+    protectionZones: ProtectionZone[];
+    lighting: LightingConfig;
+    signal?: AbortSignal;
+  }): Promise<{ imageUrl: string; description: string; fromCache?: boolean }> {
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('chat_edit', params.baseImageUrl, {
+      imageModel: cfg.imageModel,
+      instruction: params.instruction.trim(),
+      kelvin: params.lighting.kelvin,
+    });
+    const cached = getAiCacheEntry<{ imageUrl: string; description: string }>(cacheKey);
+    if (cached) {
+      return {
+        imageUrl: cached.imageUrl,
+        description: `${cached.description}（已讀取本地快取）`,
+        fromCache: true,
+      };
+    }
+
+    const res = await conversationalEditWithGemini(params);
+    setAiCacheEntry(cacheKey, res);
+    return res;
+  }
+
+  async detectPurchasableItems(params: {
+    imageUrl: string;
+    pixelPerCm: number;
+    walkwayCm: number;
+    roomDimensionsCm: { width: number; depth: number; height: number };
+    activeStyle: StyleId;
+    petFriendly: boolean;
+    cropBoxNorm?: { x: number; y: number; w: number; h: number };
+    forceRefresh?: boolean;
+    signal?: AbortSignal;
+  }): Promise<VisualSearchMatch[]> {
+    const cfg = getGeminiRuntimeConfig();
+    const cacheKey = await buildAiCacheKey('detect_purchasable', params.imageUrl, {
+      visionModel: cfg.visionModel,
+      pixelPerCm: params.pixelPerCm,
+      walkwayCm: params.walkwayCm,
+      roomW: params.roomDimensionsCm.width,
+      roomD: params.roomDimensionsCm.depth,
+      petFriendly: params.petFriendly,
+      cropBoxNorm: params.cropBoxNorm ?? null,
+    });
+    if (!params.forceRefresh) {
+      const cached = getAiCacheEntry<VisualSearchMatch[]>(cacheKey);
+      if (cached) return cached;
+    }
+
+    const res = await detectPurchasableItemsWithGemini(params);
+    setAiCacheEntry(cacheKey, res);
+    return res;
   }
 }
 

@@ -204,3 +204,26 @@ export async function shareNativeText(
   });
   return true;
 }
+
+export async function saveAndShareNativeBase64Png(
+  filename: string,
+  dataUrl: string,
+  dialogTitle = '儲存或分享工班施工標註圖'
+): Promise<boolean> {
+  if (!isNativeApp()) return false;
+  const safeName = filename.replace(/[\\/:*?"<>|]/g, '_');
+  const base64Data = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+  const res = await Filesystem.writeFile({
+    path: `exports/${safeName}`,
+    data: base64Data,
+    directory: Directory.Cache,
+    recursive: true,
+  });
+  await Share.share({
+    title: safeName,
+    files: [res.uri],
+    dialogTitle,
+  });
+  return true;
+}
+

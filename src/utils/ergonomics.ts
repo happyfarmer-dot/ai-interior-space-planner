@@ -1,5 +1,6 @@
 import type {
   ErgonomicsReport,
+  FengShuiCheckResult,
   FurnitureItem,
   Point2D,
   ProtectionZone,
@@ -24,11 +25,135 @@ function snapRecommendedTvInches(distCm: number): string {
   return `${low}" – ${high}"`;
 }
 
+function evaluateTaiwanFengShui(
+  scene: RoomScene,
+  furniture: FurnitureItem[],
+  protectionZones: ProtectionZone[]
+): FengShuiCheckResult[] {
+  const { width: roomW, depth: roomD } = scene.roomDimensionsCm;
+  const doorHinge = scene.doorSwing.hingeCm;
+  const bed = furniture.find((f) => f.category === 'bed');
+  const sofa = furniture.find((f) => f.category === 'sofa');
+  const beams = protectionZones.filter((z) => z.category === 'beam_column' && z.locked);
+  const windows = protectionZones.filter((z) => z.category === 'window');
+
+  // 1. 開門見灶 / 開門正對主座或床頭
+  let doorStoveStatus: TrafficLight = 'green';
+  let doorStoveFinding = '房門開啟視線未直沖爐灶、中島或床頭核心私密區。';
+  let doorStoveRemedy = '維持目前玄關與主機能區視線錯位即可。';
+  const primaryAnchor = bed ?? sofa;
+  if (primaryAnchor) {
+    const pr = getItemFootprintRect(primaryAnchor);
+    const centerX = pr.x + pr.w / 2;
+    const centerY = pr.y + pr.d / 2;
+    const alignedWithDoor =
+      Math.abs(centerX - doorHinge.x) < 65 || Math.abs(centerY - doorHinge.y) < 65;
+    if (alignedWithDoor) {
+      doorStoveStatus = 'yellow';
+      doorStoveFinding = `入口門扇軸線（${doorHinge.x},${doorHinge.y}cm）與「${primaryAnchor.name}」呈直線正對，易有開門見灶／門沖疑慮。`;
+      doorStoveRemedy = '建議於入口處增設 45–60cm 長虹玻璃玄關屏風、格柵或高植栽緩衝視線。';
+    }
+  }
+
+  // 2. 穿堂煞（門窗直線貫穿）
+  let throughWindStatus: TrafficLight = 'green';
+  let throughWindFinding = '入戶門與對外採光窗呈錯位動線，氣流迴旋聚氣良好。';
+  let throughWindRemedy = '無穿堂煞問題，維持窗簾與通風動線。';
+  const doorOnRight = doorHinge.x > roomW * 0.65;
+  const doorOnLeft = doorHinge.x < roomW * 0.35;
+  const doorOnBottom = doorHinge.y > roomD * 0.65;
+  const hasDirectWindow =
+    (doorOnRight && scene.windowSide === 'left') ||
+    (doorOnLeft && scene.windowSide === 'right') ||
+    (doorOnBottom && scene.windowSide === 'top') ||
+    windows.some((w) => Math.abs(w.topDownRectCm.x - doorHinge.x) < 75);
+  const hasScreenBuffer = furniture.some((f) => {
+    const fr = getItemFootprintRect(f);
+    return fr.x > roomW * 0.25 && fr.x < roomW * 0.75 && f.heightCm >= 90;
+  });
+  if (hasDirectWindow && !hasScreenBuffer) {
+    throughWindStatus = 'yellow';
+    throughWindFinding = `入口門扇與${scene.windowSide === 'left' ? '左側' : scene.windowSide === 'right' ? '右側' : '前方'}大面積採光窗形成直線貫穿（穿堂煞）。`;
+    throughWindRemedy = '建議於玄關與客廳交界增設半透光屏風、雙面展示櫃或厚實蛇形簾化解穿堂氣流。';
+  }
+
+  // 3. 橫樑壓床 / 橫樑壓沙發
+  let beamStatus: TrafficLight = 'green';
+  let beamFinding = '床頭與主沙發上方皆已避開結構大樑垂直投影區。';
+  let beamRemedy = '結構樑位安全，無需額外木作假樑包覆。';
+  for (const beam of beams) {
+    for (const target of [bed, sofa].filter(Boolean) as FurnitureItem[]) {
+      const tr = getItemFootprintRect(target);
+      if (rectsOverlap(tr, beam.topDownRectCm, 5)) {
+        beamStatus = 'red';
+        beamFinding = `「${target.name}」位於「${beam.label}」下方投影區，形成橫樑壓頂壓迫感。`;
+        beamRemedy = `建議將${target.name}前移 15–25cm 增設床頭／沙發背櫃避開樑下，或以弧形木作天花加間接燈帶修飾。`;
+        break;
+      }
+    }
+  }
+
+  // 4. 鏡子／高反光面正對床鋪或主座
+  let mirrorStatus: TrafficLight = 'green';
+  let mirrorFinding = '床鋪／主休息區正前方無大面積明鏡直照，睡眠安定度佳。';
+  let mirrorRemedy = '若有連身鏡需求，建議整合於衣櫃門片內側或側牆。';
+  if (bed) {
+    const br = getItemFootprintRect(bed);
+    const oppositeItems = furniture.filter(
+      (f) => f.category === 'wardrobe' || f.category === 'desk' || /鏡/.test(f.name)
+    );
+    for (const item of oppositeItems) {
+      const ir = getItemFootprintRect(item);
+      const facingBed =
+        Math.abs(ir.x + ir.w / 2 - (br.x + br.w / 2)) < 95 ||
+        Math.abs(ir.y + ir.d / 2 - (br.y + br.d / 2)) < 95;
+      if (facingBed) {
+        mirrorStatus = 'yellow';
+        mirrorFinding = `「${item.name}」正對床鋪方向，若含鏡面或高反光門片易造成夜間驚擾。`;
+        mirrorRemedy = '建議改用霧面烤漆／木紋門片，並將穿衣鏡改為拉出式旋轉鏡藏於櫃內。';
+        break;
+      }
+    }
+  }
+
+  return [
+    {
+      ruleId: 'door_stove',
+      title: '開門見灶／門沖檢核',
+      status: doorStoveStatus,
+      finding: doorStoveFinding,
+      remedy: doorStoveRemedy,
+    },
+    {
+      ruleId: 'through_wind',
+      title: '穿堂煞（門窗直線貫穿）',
+      status: throughWindStatus,
+      finding: throughWindFinding,
+      remedy: throughWindRemedy,
+    },
+    {
+      ruleId: 'beam_over_bed',
+      title: '橫樑壓床／壓沙發檢核',
+      status: beamStatus,
+      finding: beamFinding,
+      remedy: beamRemedy,
+    },
+    {
+      ruleId: 'mirror_facing_bed',
+      title: '鏡子正對床鋪檢核',
+      status: mirrorStatus,
+      finding: mirrorFinding,
+      remedy: mirrorRemedy,
+    },
+  ];
+}
+
 export function evaluateErgonomics(
   scene: RoomScene,
   furniture: FurnitureItem[],
   protectionZones: ProtectionZone[],
-  minWalkwayTargetCm = 75
+  minWalkwayTargetCm = 75,
+  fengShuiMode = false
 ): ErgonomicsReport {
   const { width: roomW, depth: roomD } = scene.roomDimensionsCm;
 
@@ -77,8 +202,6 @@ export function evaluateErgonomics(
     { x: Math.round(roomW * 0.45) + 115, y: Math.round(roomD * 0.35) },
   ];
 
-  // Key practical walkway checks:
-  // a) Between major seating/bed and opposite table/wall/added items
   const pairsToEvaluate: Array<{ gap: number; segA: Point2D; segB: Point2D }> = [];
 
   for (let i = 0; i < furniture.length; i++) {
@@ -87,11 +210,9 @@ export function evaluateErgonomics(
 
     for (let j = i + 1; j < furniture.length; j++) {
       const b = furniture[j];
-      // Coffee table in front of sofa intentionally sits ~40-50cm for reachability — NOT main corridor!
       const isSofaTablePair =
         (a.category === 'sofa' && b.category === 'coffee_table') ||
         (b.category === 'sofa' && a.category === 'coffee_table');
-      // Bed + bedside nightstand intentionally sit adjacent
       const isBedNightstandPair =
         (a.category === 'bed' && b.category === 'nightstand') ||
         (b.category === 'bed' && a.category === 'nightstand');
@@ -107,7 +228,6 @@ export function evaluateErgonomics(
       }
     }
 
-    // Check clearance against opposite side boundaries when item floats away from walls (>42cm off wall)
     const leftGap = ra.x;
     const rightGap = roomW - (ra.x + ra.w);
     const bottomGap = roomD - (ra.y + ra.d);
@@ -179,7 +299,6 @@ export function evaluateErgonomics(
   const conflicts: string[] = [];
 
   for (const zone of lockedZones) {
-    // Beams overhead don't block low seating/tables unless tall cabinet/wardrobe (>200cm)
     if (zone.category === 'beam_column') {
       for (const item of furniture) {
         if (item.heightCm >= 195 && rectsOverlap(getItemFootprintRect(item), zone.topDownRectCm, -5)) {
@@ -189,7 +308,6 @@ export function evaluateErgonomics(
       continue;
     }
 
-    // AC units don't block low items (<170cm), but block tall wardrobes/cat trees >165cm
     if (zone.category === 'ac_unit') {
       for (const item of furniture) {
         if (
@@ -202,7 +320,6 @@ export function evaluateErgonomics(
       continue;
     }
 
-    // Windows: high cabinets/wardrobes (>130cm) shouldn't block windows; low seating/cat tree okay with buffer unless touching tightly
     if (zone.category === 'window') {
       for (const item of furniture) {
         if (
@@ -215,7 +332,6 @@ export function evaluateErgonomics(
       continue;
     }
 
-    // Electrical panel: strictly require clearance in front of panel for tall or fixed heavy items
     if (zone.category === 'electrical_panel') {
       for (const item of furniture) {
         if (
@@ -227,6 +343,10 @@ export function evaluateErgonomics(
       }
     }
   }
+
+  const fengShuiChecks = fengShuiMode
+    ? evaluateTaiwanFengShui(scene, furniture, protectionZones)
+    : undefined;
 
   // Calculate Overall Ergonomics Score (0..100)
   let score = 96;
@@ -265,6 +385,7 @@ export function evaluateErgonomics(
       conflictCount: conflicts.length,
       conflicts,
     },
+    fengShuiChecks,
     overallScore: score,
     summaryText,
   };

@@ -69,6 +69,7 @@ export function createInitialSnapshotState(
         maxBudgetTWD: 300000,
         petFriendly: true,
         catTreeRequired: true,
+        fengShuiMode: false,
         preserveItems: ['現有實木家具'],
         minWalkwayCm: 75,
         requiredZones: ['寵物貓跳台垂直動線區'],
@@ -157,6 +158,7 @@ export type DesignAction =
   | { type: 'ADD_PROTECTION_ZONE'; zone: ProtectionZone }
   | { type: 'TOGGLE_ZONE_LOCK'; id: string }
   | { type: 'REMOVE_PROTECTION_ZONE'; id: string }
+  | { type: 'CLEAR_CANVAS_MASKS' }
   | { type: 'AUTO_DETECT_PROTECTION_ZONES'; zones: ProtectionZone[] }
   | { type: 'SET_PROPOSALS'; proposals: RearrangementProposal[] }
   | { type: 'APPLY_PROPOSAL'; proposalId: string }
@@ -330,6 +332,19 @@ export function designReducer(state: DesignStoreState, action: DesignAction): De
       return pushHistory(state, {
         ...cur,
         protectionZones: cur.protectionZones.filter((z) => z.id !== action.id),
+      });
+
+    case 'CLEAR_CANVAS_MASKS':
+      return pushHistory(state, {
+        ...cur,
+        protectionZones: [],
+        calibration: {
+          ...cur.calibration,
+          calibrated: false,
+          lineStart: { ...cur.scene.defaultCalibration.lineStart },
+          lineEnd: { ...cur.scene.defaultCalibration.lineEnd },
+          pixelPerCm: cur.scene.defaultCalibration.pixelPerCm,
+        },
       });
 
     case 'AUTO_DETECT_PROTECTION_ZONES': {

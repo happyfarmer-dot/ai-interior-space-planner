@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle, KeyRound, X } from 'lucide-react';
 import { MainCanvasViewport } from './components/canvas/MainCanvasViewport';
-import { LeftToolRail } from './components/layout/LeftToolRail';
 import { RightInspector } from './components/layout/RightInspector';
 import { TopNavbar } from './components/layout/TopNavbar';
 import { ArchitectureInfoModal } from './components/modals/ArchitectureInfoModal';
@@ -61,7 +60,6 @@ const StudioShell: React.FC = () => {
       {/* < 1024px: vertical stacked layout allowing natural page scroll + sticky preview at top
           >= 1024px (lg): classic desktop CAD split workspace */}
       <div className="no-print flex min-w-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
-        <LeftToolRail />
         <MainCanvasViewport />
         <RightInspector
           onOpenProposalModal={(opts) =>
