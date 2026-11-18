@@ -6,8 +6,10 @@ import {
   Columns2,
   LampCeiling,
   Layers,
+  LayoutGrid,
   Paintbrush,
   ShieldCheck,
+  Sparkles,
   Sun,
   Tv,
   XCircle,
@@ -50,6 +52,9 @@ export const Step3RefineInspectPanel: React.FC = () => {
     ergonomics,
     setActiveTool,
     runGenerateProposals,
+    selectProposalWithAiRender,
+    runApplyStyleTransfer,
+    runAiRefineLightingMaterials,
   } = useDesignStore();
 
   const {
@@ -61,6 +66,8 @@ export const Step3RefineInspectPanel: React.FC = () => {
     materials,
     activeMode,
     customPrompt,
+    aiRenderedImageUrl,
+    aiRenderMode,
   } = state.present;
 
   const hasPhoto = Boolean(scene.imageUrl);
@@ -69,32 +76,45 @@ export const Step3RefineInspectPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      {/* Contextual Rearrangement Proposal Switcher (if triggered from 功能 4) */}
+      {/* Contextual Rearrangement Proposal Switcher (源自功能 4) */}
       {(proposals.length > 0 || activeMode === 'rearrange') && (
         <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2.5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
               配置提案比較（源自功能 4）
             </h3>
-            {proposals.length === 0 && (
-              <button
-                type="button"
-                disabled={!hasPhoto}
-                onClick={runGenerateProposals}
-                className="rounded bg-[#C89F72]/20 px-2 py-0.5 text-[11px] font-medium text-[#E2BE96] disabled:opacity-40 cursor-pointer"
-              >
-                立即生成方案
-              </button>
-            )}
+            <div className="flex items-center gap-1.5">
+              {proposals.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => dispatch({ type: 'SET_VIEW_MODE', viewMode: 'floorplan' })}
+                  className="flex items-center gap-1 rounded border border-sky-400/40 bg-sky-500/15 px-2 py-0.5 text-[10.5px] text-sky-200 cursor-pointer"
+                >
+                  <LayoutGrid className="h-3 w-3" />
+                  2D 平面
+                </button>
+              )}
+              {proposals.length === 0 && (
+                <button
+                  type="button"
+                  disabled={!hasPhoto}
+                  onClick={runGenerateProposals}
+                  className="rounded bg-[#C89F72]/20 px-2 py-0.5 text-[11px] font-medium text-[#E2BE96] disabled:opacity-40 cursor-pointer"
+                >
+                  立即生成方案
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="space-y-2">
             {proposals.map((p) => {
               const selected = selectedProposalId === p.id;
+              const hasAiPhoto = Boolean(p.aiRenderedImageUrl);
               return (
                 <div
                   key={p.id}
-                  onClick={() => dispatch({ type: 'APPLY_PROPOSAL', proposalId: p.id })}
+                  onClick={() => selectProposalWithAiRender(p.id)}
                   className={`rounded-lg border p-2.5 transition cursor-pointer ${
                     selected
                       ? 'border-[#C89F72] bg-[#C89F72]/10'
@@ -108,6 +128,13 @@ export const Step3RefineInspectPanel: React.FC = () => {
                     </span>
                   </div>
                   <p className="mt-1 text-[11px] text-slate-400">{p.subtitle}</p>
+                  <div className="mt-1.5 flex items-center justify-between text-[10px]">
+                    <span
+                      className={hasAiPhoto ? 'text-emerald-400 font-medium' : 'text-amber-300'}
+                    >
+                      {hasAiPhoto ? '✨ AI 實景圖已渲染就緒' : '點擊即呼叫 Gemini 渲染本方案實景圖'}
+                    </span>
+                  </div>
                   {selected && (
                     <ul className="mt-2 space-y-1 border-t border-white/10 pt-2 text-[11px] text-slate-300">
                       {p.rationale.map((r, i) => (
@@ -126,9 +153,9 @@ export const Step3RefineInspectPanel: React.FC = () => {
       )}
 
       {/* Contextual Style Intensity & Before/After Toggle (源自功能 5) */}
-      {styleConfig.applied && (
-        <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2">
-          <div className="flex items-center justify-between">
+      {(styleConfig.applied || (aiRenderedImageUrl && aiRenderMode === 'style')) && (
+        <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold text-[#DFBA8C]">
               風格微調（功能 5）：{STYLES_CATALOG.find((s) => s.id === styleConfig.selectedStyleId)?.nameZh}
             </span>
@@ -142,7 +169,7 @@ export const Step3RefineInspectPanel: React.FC = () => {
             </button>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[11px] text-slate-400">強度</span>
+            <span className="text-[11px] text-slate-400">融合比例</span>
             <input
               type="range"
               min={0}
@@ -161,6 +188,15 @@ export const Step3RefineInspectPanel: React.FC = () => {
               {styleConfig.intensity}%
             </span>
           </div>
+          <button
+            type="button"
+            disabled={!hasPhoto}
+            onClick={runApplyStyleTransfer}
+            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-[#C89F72]/40 bg-[#C89F72]/10 py-1.5 text-[11px] font-semibold text-[#E2BE96] hover:bg-[#C89F72]/20 disabled:opacity-40 cursor-pointer"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            重新以 Gemini AI 生成此風格圖
+          </button>
         </section>
       )}
 
@@ -175,7 +211,6 @@ export const Step3RefineInspectPanel: React.FC = () => {
           </span>
         </div>
 
-        {/* 1. Main Walkway Traffic Light */}
         <div className={`rounded-lg border p-2.5 ${LIGHT_BORDER[ergonomics.walkwayStatus]}`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -195,7 +230,6 @@ export const Step3RefineInspectPanel: React.FC = () => {
           </p>
         </div>
 
-        {/* 2. Door & Cabinet Swing */}
         <div
           className={`rounded-lg border p-2.5 ${
             ergonomics.doorSwingClear ? LIGHT_BORDER.green : LIGHT_BORDER.red
@@ -223,7 +257,6 @@ export const Step3RefineInspectPanel: React.FC = () => {
           </p>
         </div>
 
-        {/* 3. Viewing Distance */}
         <div className={`rounded-lg border p-2.5 ${LIGHT_BORDER[ergonomics.tvDistanceStatus]}`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -236,7 +269,6 @@ export const Step3RefineInspectPanel: React.FC = () => {
           </div>
         </div>
 
-        {/* 4. MEP Lock Protection Verification */}
         <div
           className={`rounded-lg border p-2.5 ${
             ergonomics.mepProtectionStatus.conflictCount === 0
@@ -307,7 +339,6 @@ export const Step3RefineInspectPanel: React.FC = () => {
           })}
         </div>
 
-        {/* Kelvin Switcher */}
         <div>
           <span className="mb-1.5 block text-[11px] text-slate-400">人工光源色溫切換</span>
           <div className="grid grid-cols-3 gap-1.5">
@@ -341,7 +372,6 @@ export const Step3RefineInspectPanel: React.FC = () => {
           </div>
         </div>
 
-        {/* Recessed Downlights & Cove Lights */}
         <div className="grid grid-cols-2 gap-2">
           <label className="flex items-center justify-between rounded-lg border border-[#2B313C] bg-[#13161B] px-2.5 py-2 text-xs cursor-pointer">
             <span className="flex items-center gap-1.5 text-slate-200">
@@ -480,6 +510,16 @@ export const Step3RefineInspectPanel: React.FC = () => {
             );
           })}
         </div>
+
+        <button
+          type="button"
+          disabled={!hasPhoto}
+          onClick={runAiRefineLightingMaterials}
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+        >
+          <Sparkles className="h-4 w-4" />
+          以 Gemini AI 實景重繪目前光影／材質
+        </button>
       </section>
 
       <button
@@ -488,7 +528,7 @@ export const Step3RefineInspectPanel: React.FC = () => {
           setActiveTool('select');
           dispatch({ type: 'SET_STEP', step: 4 });
         }}
-        className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] shadow hover:bg-[#D8B084] transition cursor-pointer"
+        className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#C89F72]/60 bg-[#C89F72]/15 py-2.5 text-xs font-semibold text-[#E2BE96] hover:bg-[#C89F72]/25 transition cursor-pointer"
       >
         前往步驟四：採購清單與預算一鍵輸出（功能 11～13）
         <ArrowRight className="h-4 w-4" />

@@ -3,20 +3,51 @@ import { FileJson, FileSpreadsheet, Printer, X } from 'lucide-react';
 import { getMaterialById } from '../../data/materialsCatalog';
 import { getStyleById } from '../../data/stylesCatalog';
 import { useDesignStore } from '../../store/useDesignStore';
-import { downloadBomCsv, downloadDesignJson } from '../../utils/exportUtils';
+import { downloadBomCsv, downloadDesignJson, shareHtmlProposalOnNative } from '../../utils/exportUtils';
 import { renderCompositeRoomCanvas } from '../../utils/imageProcessing';
+import { isNativeApp } from '../../utils/nativePlatform';
 
 export const ProposalPdfModal: React.FC<{
   onClose: () => void;
   autoPrintOnOpen?: boolean;
 }> = ({ onClose, autoPrintOnOpen = false }) => {
   const { state, ergonomics, bom, visualSearchResults } = useDesignStore();
-  const { scene, calibration, protectionZones, styleConfig, materials, lighting, customPrompt } =
-    state.present;
+  const {
+    scene,
+    calibration,
+    protectionZones,
+    styleConfig,
+    materials,
+    lighting,
+    customPrompt,
+    aiRenderedImageUrl,
+    aiRenderMode,
+  } = state.present;
   const [generatedDate] = useState(() => new Date().toLocaleDateString('zh-TW'));
 
   const afterPreviewRef = useRef<HTMLCanvasElement | null>(null);
   const autoPrintedRef = useRef(false);
+
+  const handlePrintOrShareProposal = async () => {
+    if (isNativeApp()) {
+      let afterDataUrl: string | null = aiRenderedImageUrl ?? null;
+      try {
+        if (afterPreviewRef.current) {
+          afterDataUrl = afterPreviewRef.current.toDataURL('image/jpeg', 0.88);
+        }
+      } catch {
+        // fallback to existing url
+      }
+      await shareHtmlProposalOnNative({
+        state: state.present,
+        ergonomics,
+        bom,
+        afterImageDataUrl: afterDataUrl,
+      }).catch(() => {});
+      return;
+    }
+    window.print();
+  };
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -32,9 +63,11 @@ export const ProposalPdfModal: React.FC<{
           showBeforeOriginalOnly: false,
           rearrangeProposalActive:
             state.present.activeMode === 'rearrange' && Boolean(state.present.selectedProposalId),
+          aiRenderedImageUrl,
+          aiRenderMode,
         });
       }
-      if (autoPrintOnOpen && !autoPrintedRef.current) {
+      if (autoPrintOnOpen && !autoPrintedRef.current && !isNativeApp()) {
         autoPrintedRef.current = true;
         timer = setTimeout(() => {
           window.print();
@@ -56,6 +89,8 @@ export const ProposalPdfModal: React.FC<{
     state.present.furniture,
     calibration,
     state.present.selectedProposalId,
+    aiRenderedImageUrl,
+    aiRenderMode,
   ]);
 
   const styleDef = getStyleById(styleConfig.selectedStyleId);
@@ -112,11 +147,11 @@ export const ProposalPdfModal: React.FC<{
             </button>
             <button
               type="button"
-              onClick={() => window.print()}
+              onClick={handlePrintOrShareProposal}
               className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 sm:px-4 py-1.5 text-xs font-bold text-white hover:bg-slate-800 cursor-pointer"
             >
               <Printer className="h-3.5 w-3.5" />
-              列印 / 另存 PDF
+              {isNativeApp() ? '匯出／分享企劃書' : '列印 / 另存 PDF'}
             </button>
             <button
               type="button"

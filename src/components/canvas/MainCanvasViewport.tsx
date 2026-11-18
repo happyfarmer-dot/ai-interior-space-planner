@@ -15,6 +15,7 @@ import {
 import { useDesignStore } from '../../store/useDesignStore';
 import type { CanvasViewMode } from '../../types/design';
 import { renderCompositeRoomCanvas } from '../../utils/imageProcessing';
+import { isNativeApp } from '../../utils/nativePlatform';
 import { BeforeAfterSlider } from './BeforeAfterSlider';
 import { CanvasOverlays } from './CanvasOverlays';
 import { FloorPlan2DView } from './FloorPlan2DView';
@@ -31,6 +32,7 @@ export const MainCanvasViewport: React.FC = () => {
     isAiBusy,
     ergonomics,
     handleUploadCustomRoom,
+    pickRoomPhotoNative,
   } = useDesignStore();
 
   const {
@@ -44,6 +46,9 @@ export const MainCanvasViewport: React.FC = () => {
     calibration,
     protectionZones,
     selectedProposalId,
+    aiRenderedImageUrl,
+    aiRenderMode,
+    aiRenderDescription,
   } = state.present;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -92,6 +97,8 @@ export const MainCanvasViewport: React.FC = () => {
       calibration,
       showBeforeOriginalOnly: false,
       rearrangeProposalActive: activeMode === 'rearrange' && Boolean(selectedProposalId),
+      aiRenderedImageUrl,
+      aiRenderMode,
     });
   }, [
     viewMode,
@@ -103,6 +110,8 @@ export const MainCanvasViewport: React.FC = () => {
     furniture,
     calibration,
     selectedProposalId,
+    aiRenderedImageUrl,
+    aiRenderMode,
     mobileCollapsed,
   ]);
 
@@ -335,7 +344,10 @@ export const MainCanvasViewport: React.FC = () => {
             <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
               <button
                 type="button"
-                onClick={() => cameraInputRef.current?.click()}
+                onClick={() => {
+                  if (isNativeApp()) pickRoomPhotoNative('camera');
+                  else cameraInputRef.current?.click();
+                }}
                 className="flex items-center gap-1.5 rounded-lg bg-[#C89F72] px-3 py-1.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
               >
                 <Camera className="h-3.5 w-3.5" />
@@ -343,7 +355,10 @@ export const MainCanvasViewport: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => {
+                  if (isNativeApp()) pickRoomPhotoNative('photos');
+                  else fileInputRef.current?.click();
+                }}
                 className="flex items-center gap-1.5 rounded-lg border border-[#C89F72]/50 bg-[#1B2028] px-3 py-1.5 text-xs font-semibold text-[#E2BE96] hover:bg-[#242B35] transition cursor-pointer"
               >
                 <Upload className="h-3.5 w-3.5" />
@@ -377,13 +392,13 @@ export const MainCanvasViewport: React.FC = () => {
 
         {/* AI Processing Indicator Overlay */}
         {isAiBusy && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/55 backdrop-blur-[2px]">
-            <div className="flex items-center gap-3 rounded-xl border border-[#C89F72]/40 bg-[#181B21] px-4 py-3 shadow-2xl mx-3">
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/65 backdrop-blur-[2px]">
+            <div className="flex items-center gap-3 rounded-xl border border-[#C89F72]/50 bg-[#181B21] px-4 py-3 shadow-2xl mx-3 max-w-md">
               <Loader2 className="h-5 w-5 animate-spin text-[#C89F72] shrink-0" />
               <div>
                 <p className="text-xs sm:text-sm font-semibold text-slate-100">{isAiBusy}</p>
                 <p className="text-[11px] text-slate-400">
-                  保留原始透視結構並套用物理空間限制條件
+                  正在連線 Google Gemini API 進行實景推理與渲染，請稍候...
                 </p>
               </div>
             </div>
@@ -431,6 +446,11 @@ export const MainCanvasViewport: React.FC = () => {
               {ergonomics.mainWalkwayCm} cm
             </strong>
           </span>
+          {aiRenderDescription && (
+            <span className="hidden xl:inline text-emerald-300 truncate max-w-[300px]">
+              ✨ {aiRenderDescription}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2.5 sm:gap-3">
           <span className="hidden sm:inline">色溫 {lighting.kelvin}K</span>

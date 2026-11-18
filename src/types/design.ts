@@ -258,6 +258,8 @@ export interface RearrangementProposal {
   rationale: string[];
   furnitureLayout: FurnitureItem[];
   ergonomics: ErgonomicsReport;
+  aiRenderedImageUrl?: string | null;
+  aiVisualPromptEn?: string;
 }
 
 export type SunPreset = 'east_morning' | 'west_afternoon' | 'north_soft' | 'night_mode';
@@ -377,6 +379,9 @@ export interface CoreDesignSnapshotState {
   customPrompt: CustomDesignPrompt;
   lighting: LightingConfig;
   materials: MaterialOverrides;
+  aiRenderedImageUrl: string | null;
+  aiRenderMode: DesignMode | 'refine' | null;
+  aiRenderDescription: string | null;
 }
 
 export interface DesignVersionSnapshot {

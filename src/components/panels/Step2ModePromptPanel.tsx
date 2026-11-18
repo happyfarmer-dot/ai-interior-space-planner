@@ -3,8 +3,10 @@ import {
   ArrowRight,
   Box,
   Cpu,
+  KeyRound,
   LayoutTemplate,
   Palette,
+  RefreshCw,
   Scissors,
   Sparkles,
   Upload,
@@ -13,6 +15,7 @@ import { SAMPLE_ADDON_ITEMS } from '../../data/sampleScenes';
 import { STYLES_CATALOG } from '../../data/stylesCatalog';
 import { useDesignStore } from '../../store/useDesignStore';
 import type { DesignMode } from '../../types/design';
+import { isNativeApp, pickImageWithNativeCamera } from '../../utils/nativePlatform';
 
 const QUICK_CONSTRAINT_TAGS = [
   '寵物防抓耐磨',
@@ -29,10 +32,14 @@ export const Step2ModePromptPanel: React.FC = () => {
   const {
     state,
     dispatch,
+    geminiConfig,
+    setShowGeminiSettings,
+    runDetectSceneVLM,
     runParseConstraints,
     runGenerateProposals,
     runApplyStyleTransfer,
     runPrepareNewObject,
+    runPlaceNewObjectWithAi,
   } = useDesignStore();
 
   const { scene, activeMode, furniture, styleConfig, newObject, customPrompt } = state.present;
@@ -40,13 +47,14 @@ export const Step2ModePromptPanel: React.FC = () => {
   const [localTags, setLocalTags] = useState<string[]>(customPrompt.selectedTags);
   const itemFileRef = useRef<HTMLInputElement | null>(null);
   const hasPhoto = Boolean(scene.imageUrl);
+  const geminiReady = Boolean(geminiConfig.apiKey.trim());
 
   const toggleTag = (tag: string) => {
     const next = localTags.includes(tag)
       ? localTags.filter((t) => t !== tag)
       : [...localTags, tag];
     setLocalTags(next);
-    runParseConstraints(localText, next);
+    runParseConstraints(localText, next, { allowLocalFallback: !geminiReady });
   };
 
   const handleUploadObjectImage = (file: File) => {
@@ -65,9 +73,50 @@ export const Step2ModePromptPanel: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
+  const handlePickObjectNativeOrWeb = async () => {
+    if (isNativeApp()) {
+      try {
+        const picked = await pickImageWithNativeCamera('photos');
+        if (picked) {
+          await runPrepareNewObject(
+            picked.dataUrl,
+            picked.fileName.replace(/\.[^/.]+$/, '') || '自訂添購單品',
+            newObject.widthCm,
+            newObject.depthCm,
+            newObject.heightCm,
+            newObject.bgRemovalThreshold
+          );
+        }
+      } catch {
+        // user cancelled or denied permission
+      }
+      return;
+    }
+    itemFileRef.current?.click();
+  };
+
   return (
     <div className="space-y-4">
-      {/* Mode Selector Tabs (功能 4 / 功能 5 / 功能 6) */}
+      {!geminiReady && (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-400/50 bg-amber-500/10 p-3 text-xs">
+          <div className="min-w-0">
+            <p className="font-bold text-amber-200">請先連線 Gemini AI API</p>
+            <p className="text-[10.5px] text-slate-300">
+              家具重排、風格轉換與單品合成皆需使用您設定的 Gemini Key 執行真實 AI 演算。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowGeminiSettings(true)}
+            className="flex shrink-0 items-center gap-1 rounded-lg bg-[#C89F72] px-2.5 py-1.5 text-[11px] font-bold text-[#111315] hover:bg-[#D8B084] cursor-pointer"
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            設定 Key
+          </button>
+        </div>
+      )}
+
+      {/* Mode Selector Tabs */}
       <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-[#282E39] bg-[#14171C] p-1">
         {(
           [
@@ -112,17 +161,31 @@ export const Step2ModePromptPanel: React.FC = () => {
               功能 4｜現有傢俱智慧重排與空間優化
             </h3>
             <p className="mt-1 text-[11px] text-slate-400">
-              不更換現有家具，AI 依據採光面、自然通風軸與步驟一鎖定的機電結構遮罩，演算出 2～3 組最佳動線配置。
+              保留現有主要家具物件，透過 Gemini Vision 演算 2～3 組動線方案，並由 {geminiConfig.imageModel} 生成真實重排後的室內模擬照片與 2D 平面圖。
             </p>
           </div>
 
           <div className="space-y-1.5">
-            <span className="text-[11px] font-medium text-slate-300">
-              VLM 已辨識現有家具清單（保留重排對象）：
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium text-slate-300">
+                VLM 已辨識現有家具清單（保留重排對象）：
+              </span>
+              {hasPhoto && (
+                <button
+                  type="button"
+                  onClick={runDetectSceneVLM}
+                  className="flex items-center gap-1 text-[10.5px] text-sky-400 hover:underline cursor-pointer"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  重新掃描照片家具
+                </button>
+              )}
+            </div>
             {furniture.filter((f) => f.isOriginal).length === 0 ? (
               <p className="rounded border border-dashed border-[#2B313C] p-2.5 text-center text-[11px] text-slate-500">
-                {hasPhoto ? '暫未偵測到可移動原始家具' : '請先於「功能 1」匯入現況空間照片'}
+                {hasPhoto
+                  ? '尚未掃描現有家具（點擊下方生成按鈕將自動以 Gemini AI 辨識並完成重排與繪製）'
+                  : '請先於「功能 1」匯入現況空間照片'}
               </p>
             ) : (
               furniture
@@ -148,7 +211,7 @@ export const Step2ModePromptPanel: React.FC = () => {
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
           >
             <Sparkles className="h-4 w-4" />
-            生成 2～3 組最佳配置與 2D 平面圖
+            Gemini AI 生成重排方案與真實實景重排圖
           </button>
         </section>
       )}
@@ -161,7 +224,7 @@ export const Step2ModePromptPanel: React.FC = () => {
               功能 5｜多元風格轉換與模擬圖生成
             </h3>
             <p className="mt-1 text-[11px] text-slate-400">
-              嚴格維持原始房門、窗戶與透視結構，套用風格材質並支援「原圖／模擬圖」滑桿即時對比。
+              使用 {geminiConfig.imageModel} 嚴格鎖定原空間格局、門窗、冷氣與透視比例，生成真實裝修風格實景並支援左右滑桿對比。
             </p>
           </div>
 
@@ -175,7 +238,7 @@ export const Step2ModePromptPanel: React.FC = () => {
                   onClick={() =>
                     dispatch({
                       type: 'SET_STYLE_CONFIG',
-                      patch: { selectedStyleId: st.id, applied: true },
+                      patch: { selectedStyleId: st.id },
                     })
                   }
                   className={`rounded-lg border p-2 text-left transition cursor-pointer ${
@@ -207,7 +270,7 @@ export const Step2ModePromptPanel: React.FC = () => {
 
           <div>
             <div className="mb-1 flex items-center justify-between text-xs">
-              <span className="text-slate-300">風格轉換強度（保留原格局比例）</span>
+              <span className="text-slate-300">風格強度（生成後可即時與原圖混合對比）</span>
               <span className="font-mono-num font-semibold text-[#E2BE96]">
                 {styleConfig.intensity}%
               </span>
@@ -220,7 +283,7 @@ export const Step2ModePromptPanel: React.FC = () => {
               onChange={(e) =>
                 dispatch({
                   type: 'SET_STYLE_CONFIG',
-                  patch: { intensity: Number(e.target.value), applied: true },
+                  patch: { intensity: Number(e.target.value) },
                   recordHistory: false,
                 })
               }
@@ -235,7 +298,7 @@ export const Step2ModePromptPanel: React.FC = () => {
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
           >
             <Sparkles className="h-4 w-4" />
-            生成風格模擬圖並開啟對比滑桿
+            Gemini AI 生成風格轉換實景並開啟對比
           </button>
         </section>
       )}
@@ -249,7 +312,7 @@ export const Step2ModePromptPanel: React.FC = () => {
             </h3>
             <button
               type="button"
-              onClick={() => itemFileRef.current?.click()}
+              onClick={handlePickObjectNativeOrWeb}
               className="flex items-center gap-1 rounded border border-[#C89F72]/40 bg-[#C89F72]/10 px-2 py-0.5 text-[11px] text-[#E2BE96] hover:bg-[#C89F72]/20 cursor-pointer"
             >
               <Upload className="h-3 w-3" />
@@ -268,7 +331,6 @@ export const Step2ModePromptPanel: React.FC = () => {
             />
           </div>
 
-          {/* Preset Add-on Furniture Items */}
           <div className="grid grid-cols-2 gap-2">
             {SAMPLE_ADDON_ITEMS.map((item) => {
               const active = newObject.sourceUrl === item.imageUrl;
@@ -276,6 +338,7 @@ export const Step2ModePromptPanel: React.FC = () => {
                 <button
                   key={item.id}
                   type="button"
+                  disabled={!hasPhoto}
                   onClick={() =>
                     runPrepareNewObject(
                       item.imageUrl,
@@ -286,7 +349,7 @@ export const Step2ModePromptPanel: React.FC = () => {
                       newObject.bgRemovalThreshold
                     )
                   }
-                  className={`flex items-center gap-2 rounded-lg border p-1.5 text-left transition cursor-pointer ${
+                  className={`flex items-center gap-2 rounded-lg border p-1.5 text-left transition disabled:opacity-40 cursor-pointer ${
                     active
                       ? 'border-[#C89F72] bg-[#C89F72]/12'
                       : 'border-[#2B313C] bg-[#13161B] hover:border-slate-600'
@@ -310,7 +373,6 @@ export const Step2ModePromptPanel: React.FC = () => {
             })}
           </div>
 
-          {/* Real Dimension Inputs */}
           <div className="grid grid-cols-3 gap-2">
             <div>
               <label className="text-[10px] text-slate-400">寬 W (cm)</label>
@@ -356,7 +418,6 @@ export const Step2ModePromptPanel: React.FC = () => {
             </div>
           </div>
 
-          {/* Cutout Preview + Auto Background Removal Trigger */}
           {newObject.sourceUrl && (
             <div className="flex items-center gap-3 rounded-lg border border-[#272D38] bg-[#13161B] p-2">
               <div
@@ -419,14 +480,13 @@ export const Step2ModePromptPanel: React.FC = () => {
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
           >
             <Sparkles className="h-4 w-4" />
-            自動去背並標示 1～3 個建議擺放高亮區
+            自動去背並由 Gemini 分析建議擺放高亮區
           </button>
 
-          {/* Suggested Highlight Zones List */}
           {newObject.suggestedZones.length > 0 && (
             <div className="space-y-1.5 pt-1">
               <span className="text-[11px] font-medium text-emerald-300">
-                點擊下方或畫布高亮區直接依透視合成擺放：
+                點擊任一推薦區，即刻呼叫 Gemini AI 依光影透視合成實景：
               </span>
               {newObject.suggestedZones.map((zone) => {
                 const selected = newObject.selectedZoneId === zone.id && newObject.placed;
@@ -434,10 +494,7 @@ export const Step2ModePromptPanel: React.FC = () => {
                   <button
                     key={zone.id}
                     type="button"
-                    onClick={() => {
-                      dispatch({ type: 'PLACE_NEW_OBJECT_AT_ZONE', zoneId: zone.id });
-                      dispatch({ type: 'SET_STEP', step: 3 });
-                    }}
+                    onClick={() => runPlaceNewObjectWithAi(zone.id)}
                     className={`w-full rounded-lg border p-2 text-left transition cursor-pointer ${
                       selected
                         ? 'border-emerald-400 bg-emerald-500/15'
@@ -499,13 +556,12 @@ export const Step2ModePromptPanel: React.FC = () => {
           onClick={() => runParseConstraints(localText, localTags)}
           className="w-full rounded-md border border-sky-500/40 bg-sky-500/10 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/20 transition cursor-pointer"
         >
-          LLM 解析為結構化約束條件（JSON）
+          Gemini AI 解析為結構化約束條件（JSON）
         </button>
 
-        {/* Live Structured JSON Constraints Inspector */}
         <div className="rounded-lg border border-[#252B35] bg-[#0F1216] p-2.5">
           <div className="mb-1 flex items-center justify-between text-[10px] text-slate-400">
-            <span>注入 AI 管線之 JSON Constraints</span>
+            <span>注入 Gemini 生圖管線之 JSON Constraints</span>
             <span className="font-mono-num text-emerald-400">ACTIVE</span>
           </div>
           <pre className="max-h-32 overflow-auto font-mono-num text-[10.5px] leading-relaxed text-slate-300">

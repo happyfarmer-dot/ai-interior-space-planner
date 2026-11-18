@@ -1,6 +1,7 @@
 import { getMaterialById } from '../data/materialsCatalog';
 import { getStyleById } from '../data/stylesCatalog';
 import type {
+  DesignMode,
   FurnitureItem,
   LightingConfig,
   MaterialOption,
@@ -12,6 +13,74 @@ import type {
 } from '../types/design';
 
 const imageCache = new Map<string, HTMLImageElement>();
+
+const GEMINI_ASPECT_RATIOS: Array<{ label: string; value: number }> = [
+  { label: '1:1', value: 1 },
+  { label: '4:3', value: 4 / 3 },
+  { label: '3:4', value: 3 / 4 },
+  { label: '3:2', value: 3 / 2 },
+  { label: '2:3', value: 2 / 3 },
+  { label: '16:9', value: 16 / 9 },
+  { label: '9:16', value: 9 / 16 },
+  { label: '21:9', value: 21 / 9 },
+];
+
+export function matchGeminiAspectRatio(width: number, height: number): string {
+  const ratio = width / Math.max(1, height);
+  let best = GEMINI_ASPECT_RATIOS[0];
+  let minDiff = Infinity;
+  for (const item of GEMINI_ASPECT_RATIOS) {
+    const diff = Math.abs(Math.log(ratio / item.value));
+    if (diff < minDiff) {
+      minDiff = diff;
+      best = item;
+    }
+  }
+  return best.label;
+}
+
+export interface EncodedInlineImage {
+  mimeType: 'image/jpeg' | 'image/png';
+  data: string;
+  width: number;
+  height: number;
+  aspectRatio: string;
+}
+
+export async function urlToInlineImagePart(
+  url: string,
+  maxDim = 1280,
+  preferPng = false
+): Promise<EncodedInlineImage> {
+  const img = await loadImageCached(url);
+  const natW = Math.max(1, img.naturalWidth || 1024);
+  const natH = Math.max(1, img.naturalHeight || 768);
+  const scale = Math.min(1, maxDim / Math.max(natW, natH));
+  const w = Math.max(1, Math.round(natW * scale));
+  const h = Math.max(1, Math.round(natH * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('無法初始化畫布轉換影像格式');
+  }
+  ctx.drawImage(img, 0, 0, w, h);
+
+  const mimeType: 'image/jpeg' | 'image/png' = preferPng ? 'image/png' : 'image/jpeg';
+  const dataUrl = preferPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.86);
+  const commaIdx = dataUrl.indexOf(',');
+  const base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+
+  return {
+    mimeType,
+    data: base64,
+    width: w,
+    height: h,
+    aspectRatio: matchGeminiAspectRatio(w, h),
+  };
+}
 
 export function loadImageCached(url: string): Promise<HTMLImageElement> {
   const existing = imageCache.get(url);
@@ -328,6 +397,8 @@ export interface CompositeRenderParams {
   calibration: ScaleCalibration;
   showBeforeOriginalOnly?: boolean;
   rearrangeProposalActive?: boolean;
+  aiRenderedImageUrl?: string | null;
+  aiRenderMode?: DesignMode | 'refine' | null;
 }
 
 export async function renderCompositeRoomCanvas(
@@ -342,6 +413,8 @@ export async function renderCompositeRoomCanvas(
     furniture,
     showBeforeOriginalOnly = false,
     rearrangeProposalActive = false,
+    aiRenderedImageUrl = null,
+    aiRenderMode = null,
   } = params;
 
   const ctx = canvas.getContext('2d');
@@ -393,11 +466,30 @@ export async function renderCompositeRoomCanvas(
   // 1. Base photo
   ctx.drawImage(baseImg, 0, 0, w, h);
 
-  // 2. Style Transfer (Feature 2)
   const styleDef = getStyleById(styleConfig.selectedStyleId);
   const intensity = Math.max(0, Math.min(1, styleConfig.intensity / 100));
+  let hasRealAiOutput = false;
 
-  if (styleConfig.applied && intensity > 0) {
+  // 2. Real Gemini AI Rendered Image (Style Transfer / Rearrangement / Object Insertion / Refine)
+  if (aiRenderedImageUrl) {
+    try {
+      const aiImg = await loadImageCached(aiRenderedImageUrl);
+      ctx.save();
+      if (aiRenderMode === 'style' && styleConfig.applied) {
+        ctx.globalAlpha = intensity;
+      } else {
+        ctx.globalAlpha = 1;
+      }
+      ctx.drawImage(aiImg, 0, 0, w, h);
+      ctx.restore();
+      hasRealAiOutput = true;
+    } catch {
+      hasRealAiOutput = false;
+    }
+  }
+
+  // Fallback LUT only when Gemini rendered image is unavailable and legacy style preview toggled
+  if (!hasRealAiOutput && styleConfig.applied && intensity > 0) {
     const preRenderUrl = scene.preRenderedStyles?.[styleConfig.selectedStyleId];
     if (preRenderUrl) {
       try {
@@ -407,10 +499,9 @@ export async function renderCompositeRoomCanvas(
         ctx.drawImage(styledImg, 0, 0, w, h);
         ctx.restore();
       } catch {
-        // fallback to procedural LUT
+        // ignore
       }
     } else {
-      // Procedural Style LUT + surface synthesis for any style or custom uploaded photo
       const off = document.createElement('canvas');
       off.width = w;
       off.height = h;
@@ -421,11 +512,6 @@ export async function renderCompositeRoomCanvas(
         octx.filter = `brightness(${brightness}) contrast(${contrast}) saturate(${saturate}) sepia(${sepia}) hue-rotate(${hueRotateDeg}deg)`;
         octx.drawImage(baseImg, 0, 0, w, h);
         octx.filter = 'none';
-
-        // Apply style surface defaults gently
-        drawMaterialSurfaceMask(octx, scene.surfacePolygons.floor, w, h, styleDef.recommendedFloorId, 0.62);
-        drawMaterialSurfaceMask(octx, scene.surfacePolygons.wall, w, h, styleDef.recommendedWallId, 0.42);
-        drawMaterialSurfaceMask(octx, scene.surfacePolygons.curtain, w, h, styleDef.recommendedCurtainId, 0.55);
 
         octx.fillStyle = warmTintRgba;
         octx.fillRect(0, 0, w, h);
@@ -438,15 +524,16 @@ export async function renderCompositeRoomCanvas(
     }
   }
 
-  // 3. Explicit Local Material Inpainting overrides (Feature 9)
-  drawMaterialSurfaceMask(ctx, scene.surfacePolygons.floor, w, h, materials.floor, 0.78);
-  drawMaterialSurfaceMask(ctx, scene.surfacePolygons.wall, w, h, materials.wall, 0.64);
-  drawMaterialSurfaceMask(ctx, scene.surfacePolygons.sofa, w, h, materials.sofa, 0.75);
-  drawMaterialSurfaceMask(ctx, scene.surfacePolygons.curtain, w, h, materials.curtain, 0.72);
+  // 3. Local Material Preview Polygons (only lightly overlaid if user picked local swatch without re-running Gemini refine yet)
+  if (!hasRealAiOutput || aiRenderMode !== 'refine') {
+    drawMaterialSurfaceMask(ctx, scene.surfacePolygons.floor, w, h, materials.floor, 0.55);
+    drawMaterialSurfaceMask(ctx, scene.surfacePolygons.wall, w, h, materials.wall, 0.45);
+    drawMaterialSurfaceMask(ctx, scene.surfacePolygons.sofa, w, h, materials.sofa, 0.52);
+    drawMaterialSurfaceMask(ctx, scene.surfacePolygons.curtain, w, h, materials.curtain, 0.52);
+  }
 
-  // 4. Newly Placed Cutout Furniture Items (Feature 3) & Rearranged Layout Indicator (Feature 1)
-  if (rearrangeProposalActive) {
-    // Draw subtle architectural layout vector trajectories on floor so rearrangement is unmistakably visible on perspective render too
+  // 4. Fallback Architectural Trajectory Overlay ONLY when Gemini rearrangement image hasn't rendered
+  if (!hasRealAiOutput && rearrangeProposalActive) {
     ctx.save();
     for (const item of furniture) {
       const orig = scene.defaultFurniture.find((d) => d.id === item.id);
@@ -455,7 +542,6 @@ export async function renderCompositeRoomCanvas(
         Math.abs(orig.topDownPosCm.x - item.topDownPosCm.x) > 15 ||
         Math.abs(orig.topDownPosCm.y - item.topDownPosCm.y) > 15;
       if (moved) {
-        // Soft dashed footprint box at old spot + directional arrow to new anchor
         const ox = orig.imagePos.x * w;
         const oy = orig.imagePos.y * h;
         const nx = item.imagePos.x * w;
@@ -469,7 +555,6 @@ export async function renderCompositeRoomCanvas(
         ctx.quadraticCurveTo((ox + nx) / 2, Math.min(oy, ny) - 45, nx, ny);
         ctx.stroke();
 
-        // Target ghost furniture block at new perspective coordinate
         ctx.setLineDash([]);
         const boxW = Math.max(84, item.widthCm * 0.78);
         const boxH = Math.max(48, item.heightCm * 0.75);
@@ -490,8 +575,10 @@ export async function renderCompositeRoomCanvas(
     ctx.restore();
   }
 
+  // Skip 2D sprite cutout if Gemini already photorealistically composited the placed object
+  const skipCutoutSprites = hasRealAiOutput && (aiRenderMode === 'place_object' || aiRenderMode === 'refine');
   for (const item of furniture) {
-    if (!item.isOriginal && item.spriteUrl) {
+    if (!skipCutoutSprites && !item.isOriginal && item.spriteUrl) {
       try {
         const sprite = await loadImageCached(item.spriteUrl);
         // Scale item proportionally using perspective scale & physical height
@@ -542,7 +629,9 @@ export async function renderCompositeRoomCanvas(
     }
   }
 
-  // 5. Natural Daylight & Artificial Lighting Simulation (Feature 8)
+  // 5. Natural Daylight & Artificial Lighting Simulation (Feature 9)
+  // Skip redundant Canvas synthetic lighting if Gemini refine mode already baked lighting into the photo
+  if (!hasRealAiOutput || aiRenderMode !== 'refine') {
   ctx.save();
 
   // Sun preset directional lighting
@@ -657,4 +746,5 @@ export async function renderCompositeRoomCanvas(
   }
 
   ctx.restore();
+  }
 }

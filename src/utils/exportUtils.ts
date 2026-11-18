@@ -1,7 +1,8 @@
-import type { BomReport, CoreDesignSnapshotState, ErgonomicsReport } from '../types/design';
 import { getStyleById } from '../data/stylesCatalog';
+import type { BomReport, CoreDesignSnapshotState, ErgonomicsReport } from '../types/design';
+import { isNativeApp, saveAndShareNativeFile } from './nativePlatform';
 
-export function downloadBomCsv(bom: BomReport, sceneName: string): void {
+export function buildBomCsvContent(bom: BomReport, sceneName: string): string {
   const headers = [
     '類別',
     '品項名稱',
@@ -60,19 +61,34 @@ export function downloadBomCsv(bom: BomReport, sceneName: string): void {
   }
   rows.push(['免責聲明', bom.disclaimer, '', '', '', '', '', '', '']);
 
-  const csvContent =
+  return (
     '\uFEFF' +
     [headers, ...rows]
       .map((row) =>
         row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')
       )
-      .join('\n');
+      .join('\n')
+  );
+}
+
+export async function downloadBomCsv(bom: BomReport, sceneName: string): Promise<void> {
+  const csvContent = buildBomCsvContent(bom, sceneName);
+  const filename = `空間智繪_BOM預算分析報表_${new Date().toISOString().slice(0, 10)}.csv`;
+
+  if (isNativeApp()) {
+    try {
+      await saveAndShareNativeFile(filename, csvContent, '匯出 Excel / CSV 預算報表');
+      return;
+    } catch {
+      // fall back to web download if Share sheet was cancelled
+    }
+  }
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `空間智繪_BOM預算分析報表_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = filename;
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
@@ -188,7 +204,7 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export function downloadDesignJson(state: CoreDesignSnapshotState): void {
+export async function downloadDesignJson(state: CoreDesignSnapshotState): Promise<void> {
   const payload = {
     exportedAt: new Date().toISOString(),
     system: 'SpatialMind AI Interior Space Planner',
@@ -201,14 +217,94 @@ export function downloadDesignJson(state: CoreDesignSnapshotState): void {
     lighting: state.lighting,
     materials: state.materials,
   };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const jsonStr = JSON.stringify(payload, null, 2);
+  const filename = `spatialmind-project-${state.scene.id}.json`;
+
+  if (isNativeApp()) {
+    try {
+      await saveAndShareNativeFile(filename, jsonStr, '匯出設計專案 JSON');
+      return;
+    } catch {
+      // fall through
+    }
+  }
+
+  const blob = new Blob([jsonStr], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `spatialmind-project-${state.scene.id}.json`;
+  a.download = filename;
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+export async function shareHtmlProposalOnNative(params: {
+  state: CoreDesignSnapshotState;
+  ergonomics: ErgonomicsReport;
+  bom: BomReport;
+  afterImageDataUrl?: string | null;
+}): Promise<boolean> {
+  if (!isNativeApp()) return false;
+  const { state, ergonomics, bom, afterImageDataUrl } = params;
+  const { scene, calibration, lighting, styleConfig } = state;
+  const styleDef = getStyleById(styleConfig.selectedStyleId);
+
+  const html = `<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>${scene.name} — 空間設計與預算企劃書</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif; color: #1e293b; margin: 24px; line-height: 1.5; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .meta { color: #64748b; font-size: 13px; margin-bottom: 16px; border-bottom: 2px solid #0f172a; padding-bottom: 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+  .card { border: 1px solid #cbd5e1; border-radius: 10px; padding: 10px; }
+  img { width: 100%; border-radius: 6px; display: block; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  th, td { border-bottom: 1px solid #e2e8f0; padding: 8px; text-align: left; }
+  th { background: #f1f5f9; }
+  .disclaimer { margin-top: 16px; padding: 10px; border-radius: 8px; background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>${scene.name} — 空間規劃與裝潢預算企劃書</h1>
+  <div class="meta">
+    空間尺度：${scene.roomDimensionsCm.width} × ${scene.roomDimensionsCm.depth} × ${scene.roomDimensionsCm.height} cm（約 ${scene.areaPing} 坪）｜比例尺 ${calibration.pixelPerCm} px/cm ｜ 風格：${styleConfig.applied ? styleDef.nameZh : '現況設計'} ｜ ${lighting.kelvin}K
+  </div>
+  <div class="grid">
+    <div class="card"><strong>原始現況 BEFORE</strong>${scene.imageUrl ? `<img src="${scene.imageUrl}" />` : '<p>無照片</p>'}</div>
+    <div class="card"><strong>AI 模擬改造 AFTER</strong>${afterImageDataUrl ? `<img src="${afterImageDataUrl}" />` : '<p>尚未渲染</p>'}</div>
+  </div>
+  <div class="card">
+    <strong>物理動線檢測</strong>
+    <ul>
+      <li>主要走道淨寬：${ergonomics.mainWalkwayCm} cm（綜合評分 ${ergonomics.overallScore}/100）</li>
+      <li>門片開啟半徑：${ergonomics.doorSwingClear ? '無干涉阻擋' : ergonomics.doorConflictItem}</li>
+      <li>視聽距離建議：${ergonomics.viewingDistanceCm} cm（${ergonomics.recommendedTvInches}）</li>
+    </ul>
+  </div>
+  <table>
+    <thead><tr><th>類別</th><th>項目</th><th>數量</th><th>金額區間</th><th>佔比</th></tr></thead>
+    <tbody>
+      ${bom.items
+        .map(
+          (i) =>
+            `<tr><td>${i.category}</td><td>${i.name}</td><td>${i.quantityLabel}</td><td>NT$ ${i.minTotalTWD.toLocaleString()}–${i.maxTotalTWD.toLocaleString()}</td><td>${i.budgetSharePct}%</td></tr>`
+        )
+        .join('')}
+      <tr><th colspan="3">總計預算區間</th><th colspan="2">NT$ ${bom.grandMinTWD.toLocaleString()} ～ ${bom.grandMaxTWD.toLocaleString()}</th></tr>
+    </tbody>
+  </table>
+  <div class="disclaimer">※ 重要免責聲明：${bom.disclaimer}</div>
+</body>
+</html>`;
+
+  const filename = `空間智繪_設計企劃書_${new Date().toISOString().slice(0, 10)}.html`;
+  await saveAndShareNativeFile(filename, html, '匯出或列印完整企劃書');
+  return true;
 }

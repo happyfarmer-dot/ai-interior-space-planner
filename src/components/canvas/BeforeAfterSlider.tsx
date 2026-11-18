@@ -17,6 +17,8 @@ export const BeforeAfterSlider: React.FC<{ width: number; height: number }> = ({
     furniture,
     calibration,
     selectedProposalId,
+    aiRenderedImageUrl,
+    aiRenderMode,
   } = state.present;
 
   const beforeCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -48,9 +50,22 @@ export const BeforeAfterSlider: React.FC<{ width: number; height: number }> = ({
         calibration,
         showBeforeOriginalOnly: false,
         rearrangeProposalActive: activeMode === 'rearrange' && Boolean(selectedProposalId),
+        aiRenderedImageUrl,
+        aiRenderMode,
       });
     }
-  }, [activeMode, scene, styleConfig, materials, lighting, furniture, calibration, selectedProposalId]);
+  }, [
+    activeMode,
+    scene,
+    styleConfig,
+    materials,
+    lighting,
+    furniture,
+    calibration,
+    selectedProposalId,
+    aiRenderedImageUrl,
+    aiRenderMode,
+  ]);
 
   const updateSplit = (clientX: number) => {
     const el = containerRef.current;
@@ -112,8 +127,20 @@ export const BeforeAfterSlider: React.FC<{ width: number; height: number }> = ({
         }`}
       >
         {compact
-          ? '改造 AFTER'
-          : `模擬改造 AFTER (${styleConfig.applied ? `${styleConfig.intensity}% 風格` : '即時渲染'})`}
+          ? aiRenderedImageUrl
+            ? 'Gemini 改造'
+            : '改造 AFTER'
+          : aiRenderedImageUrl
+          ? `Gemini AI 模擬 AFTER (${
+              aiRenderMode === 'rearrange'
+                ? '家具重排實景'
+                : aiRenderMode === 'place_object'
+                ? '單品實景合成'
+                : aiRenderMode === 'refine'
+                ? '光影/材質重繪'
+                : `${styleConfig.intensity}% 風格`
+            })`
+          : `即時渲染 AFTER (${styleConfig.applied ? `${styleConfig.intensity}% 風格` : '待生成 AI 圖'})`}
       </span>
 
       {/* Interactive Split Divider */}

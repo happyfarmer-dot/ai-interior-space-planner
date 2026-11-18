@@ -1,0 +1,86 @@
+name: Build Android APK (SpatialMind AI)
+
+on:
+  push:
+    branches: ['main']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 'android-apk'
+  cancel-in-progress: false
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build production web bundle
+        run: npm run build
+
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+
+      - name: Ensure Gradle wrapper is executable
+        run: chmod +x android/gradlew
+
+      - name: Build Android Debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare APK output file
+        run: |
+          mkdir -p apk-output
+          cp android/app/build/outputs/apk/debug/app-debug.apk apk-output/SpatialMind-AI-Android.apk
+          ls -lh apk-output/SpatialMind-AI-Android.apk
+
+      - name: Upload APK workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpatialMind-AI-Android-APK
+          path: apk-output/SpatialMind-AI-Android.apk
+
+      - name: Publish latest-apk GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: 空間智繪 SpatialMind AI — Android APK 最新版
+          body: |
+            ## 📱 空間智繪 SpatialMind AI — Android 安裝檔 (`SpatialMind-AI-Android.apk`)
+
+            整合 **Google Gemini AI (Vision 空間辨識 + Nano Banana 原生圖像編輯)** 的專業級 AI 室內空間設計與裝潢輔助系統原生 Android App。
+
+            ### ✨ 核心 AI 與空間物理能力
+            - **現有傢俱智慧重排（功能 4）**：使用 Gemini Vision 分析動線與門窗避讓，並由 **Nano Banana 2.1 (`gemini-nano-banana-2.1`)** 實景重繪家具移位後之真實室內模擬圖 + 2D 平面配置圖。
+            - **多元風格轉換（功能 5）**：北歐簡約、日式侘寂、現代極簡、工業風、無印原木風、美式輕奢，鎖定原窗戶／冷氣／配電箱位置並支援 0–100% 前後滑動對比。
+            - **新增物件智慧擺放與合成（功能 6）**：自動去背與雙圖多模態合成至推薦擺放高亮區。
+            - **工程物理校準與 BOM 輸出（功能 2–3, 8–13）**：Pixel-to-CM 校準、不可更動結構保護、走道淨寬紅綠燈檢測、3000K/4000K/6000K 採光色溫模擬、原生手機分享 CSV／企劃書至 LINE。
+
+            ### 📲 安裝與快速上手步驟
+            1. 下載本頁附件 **`SpatialMind-AI-Android.apk`** 至 Android 手機並安裝（若系統提示安全性限制，請開啟「允許安裝未知來源應用程式」）。
+            2. 開啟 App 後點擊右上角 **`設定Key`**（或首頁連線卡片），貼上您於 [Google AI Studio](https://aistudio.google.com/apikey) 申請的 **Gemini API Key**。
+            3. 點擊 **「測試連線並自動探索可用模型」** 後儲存即可開始拍攝室內現況照並使用真實 AI 設計！
+            > 💡 註：Gemini 金鑰僅安全儲存於手機本機，直連 Google AI 官方伺服器；Nano Banana 原生生圖功能依 Google AI Studio 規範需具備計費額度之專案金鑰。
+          files: apk-output/SpatialMind-AI-Android.apk
+          prerelease: false
+          make_latest: true

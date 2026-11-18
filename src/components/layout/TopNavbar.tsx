@@ -5,11 +5,12 @@ import {
   Cpu,
   FileText,
   History,
+  KeyRound,
   Redo2,
   RotateCcw,
+  Sparkles,
   Undo2,
 } from 'lucide-react';
-import { getAIServiceConfig } from '../../services/aiConfig';
 import { useDesignStore } from '../../store/useDesignStore';
 import type { WorkflowStep } from '../../types/design';
 
@@ -31,15 +32,15 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onOpenProposalPdf,
   onOpenArchitecture,
 }) => {
-  const { state, dispatch, bom } = useDesignStore();
+  const { state, dispatch, bom, geminiConfig, setShowGeminiSettings } = useDesignStore();
   const { currentStep } = state.present;
-  const aiCfg = getAIServiceConfig();
 
+  const geminiReady = Boolean(geminiConfig.apiKey.trim());
   const canUndo = state.undoStack.length > 0;
   const canRedo = state.redoStack.length > 0;
 
   return (
-    <header className="no-print flex w-full shrink-0 flex-wrap sm:flex-nowrap items-center justify-between gap-x-2 gap-y-1.5 sm:gap-3 border-b border-[#232832] bg-[#14171C] px-2.5 sm:px-4 py-1.5 sm:py-0 sm:h-14">
+    <header className="no-print flex w-full shrink-0 flex-wrap sm:flex-nowrap items-center justify-between gap-x-2 gap-y-1.5 sm:gap-3 border-b border-[#232832] bg-[#14171C] px-2.5 sm:px-4 pt-[max(0.375rem,env(safe-area-inset-top))] pb-1.5 sm:py-0 sm:h-14">
       {/* Brand Title */}
       <div className="order-1 flex items-center gap-2 sm:gap-2.5 min-w-0 shrink-0">
         <div className="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-lg border border-[#C89F72]/50 bg-[#C89F72]/15 text-[#DFBA8C]">
@@ -49,7 +50,9 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           <h1 className="text-xs sm:text-sm font-bold tracking-tight text-slate-100 truncate">
             空間智繪 <span className="hidden sm:inline font-medium text-[#C89F72]">SpatialMind AI</span>
           </h1>
-          <p className="hidden sm:block text-[10px] text-slate-400">物理邏輯 × 商業預算 室內空間輔助系統</p>
+          <p className="hidden sm:block text-[10px] text-slate-400">
+            物理邏輯 × Gemini AI 實景室內設計系統
+          </p>
         </div>
       </div>
 
@@ -84,7 +87,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         })}
       </nav>
 
-      {/* Compact Stepper for Tablet/Mobile (wraps cleanly on < 640px, single row on sm..lg) */}
+      {/* Compact Stepper for Tablet/Mobile */}
       <div className="order-3 sm:order-2 grid w-full grid-cols-4 gap-1 sm:flex sm:w-auto sm:items-center sm:gap-1 xl:hidden">
         {STEPS.map((item) => {
           const active = currentStep === item.step;
@@ -106,8 +109,34 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         })}
       </div>
 
-      {/* Right Tools: Undo/Redo, Snapshots, API Architecture, Export */}
+      {/* Right Tools: Undo/Redo, Gemini Key Config, Snapshots, Architecture, Export */}
       <div className="order-2 sm:order-3 flex items-center gap-1 sm:gap-1.5 shrink-0">
+        {/* Gemini API Status & Settings Trigger (Always visible on mobile & desktop) */}
+        <button
+          type="button"
+          onClick={() => setShowGeminiSettings(true)}
+          className={`flex items-center gap-1 rounded-lg border px-2 sm:px-2.5 py-1 sm:py-1.5 text-[11px] font-bold transition cursor-pointer ${
+            geminiReady
+              ? 'border-emerald-500/45 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
+              : 'border-amber-400/60 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'
+          }`}
+          title={`設定 Google Gemini API Key 與模型（目前圖像模型：${geminiConfig.imageModel}）`}
+        >
+          {geminiReady ? (
+            <>
+              <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="hidden md:inline">Gemini 已連線</span>
+              <span className="md:hidden">AI就緒</span>
+            </>
+          ) : (
+            <>
+              <KeyRound className="h-3.5 w-3.5 text-amber-300" />
+              <span className="hidden md:inline">設定 Gemini Key</span>
+              <span className="md:hidden">設定Key</span>
+            </>
+          )}
+        </button>
+
         <div className="flex items-center rounded-lg border border-[#272D38] bg-[#191D24] p-0.5">
           <button
             type="button"
@@ -169,11 +198,11 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         <button
           type="button"
           onClick={onOpenArchitecture}
-          className="hidden lg:flex items-center gap-1.5 rounded-lg border border-[#272D38] bg-[#191D24] px-2.5 py-1.5 text-[11px] text-slate-300 hover:border-sky-400/50 transition cursor-pointer"
-          title="檢視系統架構與 AI Service API 整合規格"
+          className="hidden lg:flex items-center gap-1.5 rounded-lg border border-[#272D38] bg-[#191D24] px-2 py-1.5 text-[11px] text-slate-300 hover:border-sky-400/50 transition cursor-pointer"
+          title="檢視系統架構與 AI 管線規格"
         >
-          <Cpu className="h-3.5 w-3.5 text-emerald-400" />
-          <span>{aiCfg.mode === 'live' ? 'Live API' : 'Mock AI 就緒'}</span>
+          <Cpu className="h-3.5 w-3.5 text-sky-400" />
+          <span>架構</span>
         </button>
 
         <button

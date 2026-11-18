@@ -98,6 +98,9 @@ export function createInitialSnapshotState(
       curtain: null,
       activeTarget: null,
     },
+    aiRenderedImageUrl: null,
+    aiRenderMode: null,
+    aiRenderDescription: null,
   };
 }
 
@@ -132,6 +135,21 @@ export type DesignAction =
   | { type: 'SET_VIEW_MODE'; viewMode: CanvasViewMode }
   | { type: 'LOAD_SCENE'; scene: RoomScene }
   | {
+      type: 'APPLY_VLM_SCENE_ANALYSIS';
+      payload: {
+        name: string;
+        description: string;
+        roomDimensionsCm: { width: number; depth: number; height: number };
+        areaPing: number;
+        windowSide: 'left' | 'right' | 'top';
+        tvWallCenterCm: { x: number; y: number };
+        doorSwing: RoomScene['doorSwing'];
+        surfacePolygons: RoomScene['surfacePolygons'];
+        furniture: FurnitureItem[];
+        protectionZones: ProtectionZone[];
+      };
+    }
+  | {
       type: 'UPDATE_SCENE_INFO';
       patch: { name?: string; areaPing?: number; widthCm?: number; depthCm?: number; heightCm?: number };
     }
@@ -142,6 +160,14 @@ export type DesignAction =
   | { type: 'AUTO_DETECT_PROTECTION_ZONES'; zones: ProtectionZone[] }
   | { type: 'SET_PROPOSALS'; proposals: RearrangementProposal[] }
   | { type: 'APPLY_PROPOSAL'; proposalId: string }
+  | { type: 'CACHE_PROPOSAL_IMAGE'; proposalId: string; imageUrl: string; description: string }
+  | {
+      type: 'SET_AI_RENDER';
+      imageUrl: string | null;
+      mode: DesignMode | 'refine' | null;
+      description: string | null;
+      recordHistory?: boolean;
+    }
   | { type: 'MOVE_FURNITURE_2D'; id: string; x: number; y: number; rotationDeg?: number }
   | { type: 'SET_STYLE_CONFIG'; patch: Partial<StyleConfig>; recordHistory?: boolean }
   | { type: 'SET_NEW_OBJECT'; patch: Partial<NewObjectConfig>; recordHistory?: boolean }
@@ -218,6 +244,42 @@ export function designReducer(state: DesignStoreState, action: DesignAction): De
         undoStack: [...state.undoStack, structuredClone(cur)].slice(-35),
         redoStack: [],
       };
+    }
+
+    case 'APPLY_VLM_SCENE_ANALYSIS': {
+      const p = action.payload;
+      const updatedScene: RoomScene = {
+        ...cur.scene,
+        name: p.name || cur.scene.name,
+        description: p.description || cur.scene.description,
+        roomDimensionsCm: { ...p.roomDimensionsCm },
+        areaPing: p.areaPing,
+        windowSide: p.windowSide,
+        tvWallCenterCm: { ...p.tvWallCenterCm },
+        doorSwing: { ...p.doorSwing },
+        surfacePolygons: p.surfacePolygons,
+        defaultFurniture: p.furniture.map((f) => ({
+          ...f,
+          topDownPosCm: { ...f.topDownPosCm },
+          imagePos: { ...f.imagePos },
+          bboxNorm: { ...f.bboxNorm },
+        })),
+        defaultProtectionZones: p.protectionZones.map((z) => ({
+          ...z,
+          points: [...z.points],
+          topDownRectCm: { ...z.topDownRectCm },
+        })),
+      };
+
+      const manualZones = cur.protectionZones.filter((z) => !z.autoDetected);
+      const mergedZones = [...manualZones, ...updatedScene.defaultProtectionZones];
+
+      return pushHistory(state, {
+        ...cur,
+        scene: updatedScene,
+        furniture: updatedScene.defaultFurniture,
+        protectionZones: mergedZones,
+      });
     }
 
     case 'UPDATE_SCENE_INFO': {
@@ -299,9 +361,47 @@ export function designReducer(state: DesignStoreState, action: DesignAction): De
           ...f,
           topDownPosCm: { ...f.topDownPosCm },
           imagePos: { ...f.imagePos },
+          bboxNorm: { ...f.bboxNorm },
         })),
+        aiRenderedImageUrl: chosen.aiRenderedImageUrl ?? null,
+        aiRenderMode: chosen.aiRenderedImageUrl ? 'rearrange' : null,
+        aiRenderDescription: chosen.aiRenderedImageUrl
+          ? `Gemini AI 已渲染：${chosen.title}`
+          : null,
       });
     }
+
+    case 'CACHE_PROPOSAL_IMAGE': {
+      const nextProposals = cur.proposals.map((p) =>
+        p.id === action.proposalId ? { ...p, aiRenderedImageUrl: action.imageUrl } : p
+      );
+      return {
+        ...state,
+        present: {
+          ...cur,
+          proposals: nextProposals,
+          ...(cur.selectedProposalId === action.proposalId
+            ? {
+                aiRenderedImageUrl: action.imageUrl,
+                aiRenderMode: 'rearrange',
+                aiRenderDescription: action.description,
+              }
+            : {}),
+        },
+      };
+    }
+
+    case 'SET_AI_RENDER':
+      return pushHistory(
+        state,
+        {
+          ...cur,
+          aiRenderedImageUrl: action.imageUrl,
+          aiRenderMode: action.mode,
+          aiRenderDescription: action.description,
+        },
+        action.recordHistory ?? true
+      );
 
     case 'MOVE_FURNITURE_2D': {
       return pushHistory(state, {

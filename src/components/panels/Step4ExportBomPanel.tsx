@@ -17,6 +17,7 @@ import {
   downloadBomCsv,
   formatBomPlainTextReport,
 } from '../../utils/exportUtils';
+import { isNativeApp, shareNativeText } from '../../utils/nativePlatform';
 
 interface Step4Props {
   onOpenProposalModal: (opts?: { autoPrint?: boolean }) => void;
@@ -63,10 +64,16 @@ export const Step4ExportBomPanel: React.FC<Step4Props> = ({ onOpenProposalModal 
     if (ok) {
       setFallbackReportText(null);
       setCopyToast('copied');
-    } else {
-      setFallbackReportText(text);
-      setCopyToast('error');
+      return;
     }
+    if (isNativeApp()) {
+      const shared = await shareNativeText('空間智繪 BOM 預算明細', text, '傳送明細至 LINE').catch(
+        () => false
+      );
+      if (shared) return;
+    }
+    setFallbackReportText(text);
+    setCopyToast('error');
   };
 
   return (

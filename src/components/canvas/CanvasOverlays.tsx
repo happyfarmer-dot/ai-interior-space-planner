@@ -38,6 +38,7 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
     selectedFurnitureId,
     setSelectedFurnitureId,
     ergonomics,
+    runPlaceNewObjectWithAi,
   } = useDesignStore();
 
   const {
@@ -438,7 +439,7 @@ export const CanvasOverlays: React.FC<{ width: number; height: number }> = ({
               className="cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation();
-                dispatch({ type: 'PLACE_NEW_OBJECT_AT_ZONE', zoneId: zone.id });
+                runPlaceNewObjectWithAi(zone.id);
               }}
             >
               <polygon

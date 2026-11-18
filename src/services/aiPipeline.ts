@@ -1,6 +1,8 @@
 import type {
   FurnitureItem,
   HighlightZone,
+  LightingConfig,
+  MaterialOverrides,
   ParsedDesignConstraints,
   ProtectionZone,
   RearrangementProposal,
@@ -8,39 +10,98 @@ import type {
   StyleId,
   VisualSearchMatch,
 } from '../types/design';
-import { getAIServiceConfig } from './aiConfig';
+import { getAIServiceConfig, hasGeminiApiKey } from './aiConfig';
 import {
-  analyzeHighlightZonesMock,
-  generateRearrangementProposalsMock,
-  parseConstraintsMock,
-  visualSearchMock,
-} from './mockAiEngine';
+  analyzeObjectZonesWithGemini,
+  analyzeUploadedRoomWithGemini,
+  compositeNewObjectWithGemini,
+  generateRearrangementPlanWithGemini,
+  parseConstraintsWithGemini,
+  renderRearrangedRoomImageWithGemini,
+  renderStyleTransferWithGemini,
+  refineLightingAndMaterialsWithGemini,
+} from './geminiClient';
+import { parseConstraintsMock, visualSearchMock } from './mockAiEngine';
 
 export interface IAIPipelineService {
   readonly modeLabel: string;
+  readonly isConfigured: boolean;
+  analyzeUploadedRoom(params: {
+    imageUrl: string;
+    naturalWidth: number;
+    naturalHeight: number;
+    fallbackName?: string;
+  }): Promise<{
+    sceneName: string;
+    description: string;
+    roomDimensionsCm: { width: number; depth: number; height: number };
+    areaPing: number;
+    windowSide: 'left' | 'right' | 'top';
+    tvWallCenterCm: { x: number; y: number };
+    doorSwing: RoomScene['doorSwing'];
+    furniture: FurnitureItem[];
+    protectionZones: ProtectionZone[];
+    surfacePolygons: RoomScene['surfacePolygons'];
+  }>;
   parseDesignConstraints(
     freeText: string,
-    selectedTags: string[]
+    selectedTags: string[],
+    options?: { allowLocalFallback?: boolean }
   ): Promise<ParsedDesignConstraints>;
-  detectSceneElementsVLM(scene: RoomScene): Promise<{
-    detectedFurnitureCount: number;
-    detectedMepCount: number;
-    confidence: number;
-    notes: string;
-  }>;
   generateRearrangementProposals(
     scene: RoomScene,
     furniture: FurnitureItem[],
     protectionZones: ProtectionZone[],
-    constraints: ParsedDesignConstraints
+    constraints: ParsedDesignConstraints,
+    lighting: LightingConfig
   ): Promise<RearrangementProposal[]>;
+  renderRearrangedProposalImage(
+    scene: RoomScene,
+    proposal: RearrangementProposal,
+    protectionZones: ProtectionZone[],
+    constraints: ParsedDesignConstraints,
+    lighting: LightingConfig
+  ): Promise<{ imageUrl: string; description: string }>;
+  generateStyleTransferImage(params: {
+    scene: RoomScene;
+    styleId: StyleId;
+    intensity: number;
+    protectionZones: ProtectionZone[];
+    constraints: ParsedDesignConstraints;
+    lighting: LightingConfig;
+    materials: MaterialOverrides;
+  }): Promise<{ imageUrl: string; description: string }>;
   analyzeObjectPlacementZones(
     scene: RoomScene,
+    itemName: string,
     widthCm: number,
     depthCm: number,
+    heightCm: number,
     protectionZones: ProtectionZone[],
     existingFurniture: FurnitureItem[]
   ): Promise<HighlightZone[]>;
+  compositeNewObjectImage(params: {
+    baseImageUrl: string;
+    imageWidth: number;
+    imageHeight: number;
+    objectImageUrl: string;
+    itemName: string;
+    widthCm: number;
+    depthCm: number;
+    heightCm: number;
+    zone: HighlightZone;
+    constraints: ParsedDesignConstraints;
+    lighting: LightingConfig;
+  }): Promise<{ imageUrl: string; description: string }>;
+  refineLightingAndMaterials(params: {
+    baseImageUrl: string;
+    imageWidth: number;
+    imageHeight: number;
+    lighting: LightingConfig;
+    materials: MaterialOverrides;
+    protectionZones: ProtectionZone[];
+    constraints: ParsedDesignConstraints;
+  }): Promise<{ imageUrl: string; description: string }>;
   visualSearchProducts(
     furniture: FurnitureItem[],
     activeStyle: StyleId,
@@ -48,94 +109,126 @@ export interface IAIPipelineService {
   ): Promise<VisualSearchMatch[]>;
 }
 
-const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+class GeminiInteriorAIService implements IAIPipelineService {
+  get isConfigured(): boolean {
+    return hasGeminiApiKey();
+  }
 
-class HybridAIService implements IAIPipelineService {
   get modeLabel(): string {
     const cfg = getAIServiceConfig();
-    return cfg.mode === 'live' ? 'Live API Pipeline' : 'Local AI Simulation Engine';
+    return cfg.mode === 'live' ? `Gemini AI (${cfg.imageModel})` : '尚未設定 Gemini Key';
+  }
+
+  analyzeUploadedRoom(params: {
+    imageUrl: string;
+    naturalWidth: number;
+    naturalHeight: number;
+    fallbackName?: string;
+  }) {
+    return analyzeUploadedRoomWithGemini(params);
   }
 
   async parseDesignConstraints(
     freeText: string,
-    selectedTags: string[]
+    selectedTags: string[],
+    options?: { allowLocalFallback?: boolean }
   ): Promise<ParsedDesignConstraints> {
-    const cfg = getAIServiceConfig();
-    if (cfg.mode === 'live' && import.meta.env.VITE_LLM_API_KEY) {
-      try {
-        const res = await fetch(cfg.llmEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${import.meta.env.VITE_LLM_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            response_format: { type: 'json_object' },
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'Extract structured interior design JSON constraints: maxBudgetTWD, petFriendly, catTreeRequired, preserveItems, minWalkwayCm, requiredZones, materialRestrictions, storagePriority, notes.',
-              },
-              {
-                role: 'user',
-                content: `Tags: ${selectedTags.join(', ')}\nNotes: ${freeText}`,
-              },
-            ],
-          }),
-        });
-        if (res.ok) {
-          const json = await res.json();
-          const parsed = JSON.parse(json.choices?.[0]?.message?.content ?? '{}');
-          if (parsed && typeof parsed.petFriendly === 'boolean') {
-            return parsed as ParsedDesignConstraints;
-          }
-        }
-      } catch {
-        // Fallback gracefully to deterministic parser
-      }
+    if (!hasGeminiApiKey() && options?.allowLocalFallback) {
+      return parseConstraintsMock(freeText, selectedTags);
     }
-
-    await delay(280);
-    return parseConstraintsMock(freeText, selectedTags);
+    return parseConstraintsWithGemini(freeText, selectedTags);
   }
 
-  async detectSceneElementsVLM(scene: RoomScene) {
-    await delay(350);
-    return {
-      detectedFurnitureCount: scene.defaultFurniture.length,
-      detectedMepCount: scene.defaultProtectionZones.length,
-      confidence: 0.94,
-      notes: `已識別 ${scene.defaultFurniture.length} 件現有家具與 ${scene.defaultProtectionZones.length} 處結構／機電限制區域`,
-    };
-  }
-
-  async generateRearrangementProposals(
+  generateRearrangementProposals(
     scene: RoomScene,
     furniture: FurnitureItem[],
     protectionZones: ProtectionZone[],
-    constraints: ParsedDesignConstraints
+    constraints: ParsedDesignConstraints,
+    lighting: LightingConfig
   ): Promise<RearrangementProposal[]> {
-    await delay(420);
-    return generateRearrangementProposalsMock(scene, furniture, protectionZones, constraints);
+    return generateRearrangementPlanWithGemini({
+      scene,
+      furniture,
+      protectionZones,
+      constraints,
+      lighting,
+    });
   }
 
-  async analyzeObjectPlacementZones(
+  renderRearrangedProposalImage(
     scene: RoomScene,
+    proposal: RearrangementProposal,
+    protectionZones: ProtectionZone[],
+    constraints: ParsedDesignConstraints,
+    lighting: LightingConfig
+  ): Promise<{ imageUrl: string; description: string }> {
+    return renderRearrangedRoomImageWithGemini({
+      scene,
+      proposal,
+      protectionZones,
+      constraints,
+      lighting,
+    });
+  }
+
+  generateStyleTransferImage(params: {
+    scene: RoomScene;
+    styleId: StyleId;
+    intensity: number;
+    protectionZones: ProtectionZone[];
+    constraints: ParsedDesignConstraints;
+    lighting: LightingConfig;
+    materials: MaterialOverrides;
+  }): Promise<{ imageUrl: string; description: string }> {
+    return renderStyleTransferWithGemini(params);
+  }
+
+  analyzeObjectPlacementZones(
+    scene: RoomScene,
+    itemName: string,
     widthCm: number,
     depthCm: number,
+    heightCm: number,
     protectionZones: ProtectionZone[],
     existingFurniture: FurnitureItem[]
   ): Promise<HighlightZone[]> {
-    await delay(320);
-    return analyzeHighlightZonesMock(
+    return analyzeObjectZonesWithGemini({
       scene,
+      itemName,
       widthCm,
       depthCm,
+      heightCm,
       protectionZones,
-      existingFurniture
-    );
+      existingFurniture,
+    });
+  }
+
+  compositeNewObjectImage(params: {
+    baseImageUrl: string;
+    imageWidth: number;
+    imageHeight: number;
+    objectImageUrl: string;
+    itemName: string;
+    widthCm: number;
+    depthCm: number;
+    heightCm: number;
+    zone: HighlightZone;
+    constraints: ParsedDesignConstraints;
+    lighting: LightingConfig;
+  }): Promise<{ imageUrl: string; description: string }> {
+    return compositeNewObjectWithGemini(params);
+  }
+
+  refineLightingAndMaterials(params: {
+    baseImageUrl: string;
+    imageWidth: number;
+    imageHeight: number;
+    lighting: LightingConfig;
+    materials: MaterialOverrides;
+    protectionZones: ProtectionZone[];
+    constraints: ParsedDesignConstraints;
+  }): Promise<{ imageUrl: string; description: string }> {
+    return refineLightingAndMaterialsWithGemini(params);
   }
 
   async visualSearchProducts(
@@ -143,9 +236,8 @@ class HybridAIService implements IAIPipelineService {
     activeStyle: StyleId,
     petFriendly: boolean
   ): Promise<VisualSearchMatch[]> {
-    await delay(260);
     return visualSearchMock(furniture, activeStyle, petFriendly);
   }
 }
 
-export const aiPipeline: IAIPipelineService = new HybridAIService();
+export const aiPipeline: IAIPipelineService = new GeminiInteriorAIService();
