@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Inter', 'Noto Sans TC', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    --surface-base: #0e1013;
+    --surface-panel: #16191e;
+    --surface-elevated: #1e2229;
+    --surface-hover: #252a33;
+    --border-cad: #2b313c;
+    --accent-oak: #c89f72;
+    --accent-oak-soft: #e2be96;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    font-family: var(--font-sans);
+    background-color: var(--surface-base);
+    color: #e6e8eb;
+  }
+}
+
+.font-mono-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom sleek dark CAD scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #121418;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2f3541;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #444c5c;
+}
+
+/* Custom CAD range sliders */
+input[type='range'].cad-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  background: #2b313c;
+  border-radius: 999px;
+  outline: none;
+}
+
+input[type='range'].cad-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c89f72;
+  border: 2px solid #16191e;
+  box-shadow: 0 0 0 1px rgba(200, 159, 114, 0.5);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+input[type='range'].cad-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+/* Architectural hatched pattern for MEP protection overlay */
+.mep-hatch-bg {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(239, 68, 68, 0.16),
+    rgba(239, 68, 68, 0.16) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+/* Print / Export PDF Styling */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #111827 !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only-container {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .print-break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

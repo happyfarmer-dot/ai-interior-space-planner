@@ -1,0 +1,511 @@
+import React, { useRef, useState } from 'react';
+import {
+  ArrowRight,
+  Box,
+  Cpu,
+  LayoutTemplate,
+  Palette,
+  Scissors,
+  Sparkles,
+  Upload,
+} from 'lucide-react';
+import { SAMPLE_ADDON_ITEMS } from '../../data/sampleScenes';
+import { STYLES_CATALOG } from '../../data/stylesCatalog';
+import { useDesignStore } from '../../store/useDesignStore';
+import type { DesignMode } from '../../types/design';
+
+const QUICK_CONSTRAINT_TAGS = [
+  '寵物防抓耐磨',
+  '貓跳台動線',
+  '預算上限 30 萬',
+  '玄關落塵區',
+  '大量收納櫃',
+  '保留原有實木桌',
+  '無障礙寬走道',
+  '親子安全圓角',
+];
+
+export const Step2ModePromptPanel: React.FC = () => {
+  const {
+    state,
+    dispatch,
+    runParseConstraints,
+    runGenerateProposals,
+    runApplyStyleTransfer,
+    runPrepareNewObject,
+  } = useDesignStore();
+
+  const { activeMode, furniture, styleConfig, newObject, customPrompt } = state.present;
+  const [localText, setLocalText] = useState(customPrompt.freeText);
+  const [localTags, setLocalTags] = useState<string[]>(customPrompt.selectedTags);
+  const itemFileRef = useRef<HTMLInputElement | null>(null);
+
+  const toggleTag = (tag: string) => {
+    const next = localTags.includes(tag)
+      ? localTags.filter((t) => t !== tag)
+      : [...localTags, tag];
+    setLocalTags(next);
+    runParseConstraints(localText, next);
+  };
+
+  const handleUploadObjectImage = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = reader.result as string;
+      runPrepareNewObject(
+        url,
+        file.name.replace(/\.[^/.]+$/, '') || '自訂添購單品',
+        newObject.widthCm,
+        newObject.depthCm,
+        newObject.heightCm,
+        newObject.bgRemovalThreshold
+      );
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Mode Selector Tabs (Module 1 / 2 / 3) */}
+      <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-[#282E39] bg-[#14171C] p-1">
+        {(
+          [
+            { id: 'rearrange', label: '傢俱智慧重排', sub: '功能 1', icon: LayoutTemplate },
+            { id: 'style', label: '全室換風格', sub: '功能 2', icon: Palette },
+            { id: 'place_object', label: '置入新物件', sub: '功能 3', icon: Box },
+          ] as Array<{ id: DesignMode; label: string; sub: string; icon: React.ComponentType<{ className?: string }> }>
+        ).map((m) => {
+          const Icon = m.icon;
+          const active = activeMode === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => dispatch({ type: 'SET_MODE', mode: m.id })}
+              className={`flex flex-col items-center rounded-lg px-1.5 py-2 text-center transition cursor-pointer ${
+                active
+                  ? 'bg-[#C89F72] text-[#111315] shadow-sm'
+                  : 'text-slate-300 hover:bg-white/5'
+              }`}
+            >
+              <Icon className="mb-1 h-4 w-4" />
+              <span className="text-[11px] font-bold leading-tight">{m.label}</span>
+              <span className={`text-[9.5px] ${active ? 'text-[#2C2014]' : 'text-slate-500'}`}>
+                {m.sub}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Mode 1: Smart Furniture Rearrangement */}
+      {activeMode === 'rearrange' && (
+        <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
+          <div>
+            <h3 className="text-xs font-semibold text-[#DFBA8C]">
+              功能 1｜現有傢俱智慧重排與空間優化
+            </h3>
+            <p className="mt-1 text-[11px] text-slate-400">
+              不更換現有家具，AI 依據左側採光面、自然通風軸與步驟一鎖定的機電結構遮罩，演算出 2～3 組最佳動線配置。
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="text-[11px] font-medium text-slate-300">
+              VLM 已辨識現有家具清單（保留重排對象）：
+            </span>
+            {furniture
+              .filter((f) => f.isOriginal)
+              .map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between rounded-md border border-[#272D38] bg-[#13161B] px-2.5 py-1.5 text-xs"
+                >
+                  <span className="text-slate-200">{item.name}</span>
+                  <span className="font-mono-num text-[11px] text-slate-400">
+                    {item.widthCm}×{item.depthCm}×{item.heightCm}cm
+                  </span>
+                </div>
+              ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={runGenerateProposals}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+          >
+            <Sparkles className="h-4 w-4" />
+            生成 2～3 組最佳配置與 2D 平面圖
+          </button>
+        </section>
+      )}
+
+      {/* Mode 2: Style Transfer & Rendering */}
+      {activeMode === 'style' && (
+        <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
+          <div>
+            <h3 className="text-xs font-semibold text-[#DFBA8C]">
+              功能 2｜多元風格轉換與模擬圖生成
+            </h3>
+            <p className="mt-1 text-[11px] text-slate-400">
+              嚴格維持原始房門、窗戶與透視結構，套用風格材質並支援「原圖／模擬圖」滑桿即時對比。
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {STYLES_CATALOG.map((st) => {
+              const selected = styleConfig.selectedStyleId === st.id;
+              return (
+                <button
+                  key={st.id}
+                  type="button"
+                  onClick={() =>
+                    dispatch({
+                      type: 'SET_STYLE_CONFIG',
+                      patch: { selectedStyleId: st.id, applied: true },
+                    })
+                  }
+                  className={`rounded-lg border p-2 text-left transition cursor-pointer ${
+                    selected
+                      ? 'border-[#C89F72] bg-[#C89F72]/12'
+                      : 'border-[#2B313C] bg-[#13161B] hover:border-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-100">{st.nameZh}</span>
+                    <div className="flex -space-x-1">
+                      {st.palette.map((hex) => (
+                        <span
+                          key={hex}
+                          className="h-3 w-3 rounded-full border border-black/40"
+                          style={{ backgroundColor: hex }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <p className="mt-0.5 text-[10px] text-slate-400">{st.nameEn}</p>
+                  <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-400">
+                    {st.tagline}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div>
+            <div className="mb-1 flex items-center justify-between text-xs">
+              <span className="text-slate-300">風格轉換強度（保留原格局比例）</span>
+              <span className="font-mono-num font-semibold text-[#E2BE96]">
+                {styleConfig.intensity}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={styleConfig.intensity}
+              onChange={(e) =>
+                dispatch({
+                  type: 'SET_STYLE_CONFIG',
+                  patch: { intensity: Number(e.target.value), applied: true },
+                  recordHistory: false,
+                })
+              }
+              className="cad-slider w-full"
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={runApplyStyleTransfer}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2.5 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+          >
+            <Sparkles className="h-4 w-4" />
+            生成風格模擬圖並開啟對比滑桿
+          </button>
+        </section>
+      )}
+
+      {/* Mode 3: New Object Smart Placement */}
+      {activeMode === 'place_object' && (
+        <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold text-[#DFBA8C]">
+              功能 3｜新增物件智慧擺放與去背合成
+            </h3>
+            <button
+              type="button"
+              onClick={() => itemFileRef.current?.click()}
+              className="flex items-center gap-1 rounded border border-[#C89F72]/40 bg-[#C89F72]/10 px-2 py-0.5 text-[11px] text-[#E2BE96] hover:bg-[#C89F72]/20 cursor-pointer"
+            >
+              <Upload className="h-3 w-3" />
+              上傳單品照
+            </button>
+            <input
+              ref={itemFileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleUploadObjectImage(file);
+              }}
+            />
+          </div>
+
+          {/* Preset Add-on Objects */}
+          <div className="grid grid-cols-2 gap-2">
+            {SAMPLE_ADDON_ITEMS.map((item) => {
+              const active = newObject.sourceUrl === item.imageUrl;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() =>
+                    runPrepareNewObject(
+                      item.imageUrl,
+                      item.name,
+                      item.widthCm,
+                      item.depthCm,
+                      item.heightCm,
+                      newObject.bgRemovalThreshold
+                    )
+                  }
+                  className={`flex items-center gap-2 rounded-lg border p-1.5 text-left transition cursor-pointer ${
+                    active
+                      ? 'border-[#C89F72] bg-[#C89F72]/12'
+                      : 'border-[#2B313C] bg-[#13161B] hover:border-slate-600'
+                  }`}
+                >
+                  <img
+                    src={item.imageUrl}
+                    alt={item.name}
+                    className="h-11 w-11 rounded bg-white object-contain p-0.5"
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate text-[11px] font-semibold text-slate-100">
+                      {item.name}
+                    </p>
+                    <p className="font-mono-num text-[10px] text-slate-400">
+                      {item.widthCm}×{item.depthCm}×{item.heightCm}cm
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Real Dimension Inputs */}
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] text-slate-400">寬 W (cm)</label>
+              <input
+                type="number"
+                value={newObject.widthCm}
+                onChange={(e) =>
+                  dispatch({
+                    type: 'SET_NEW_OBJECT',
+                    patch: { widthCm: Math.max(20, Number(e.target.value) || 60) },
+                  })
+                }
+                className="mt-0.5 w-full rounded border border-[#2B313C] bg-[#111419] px-2 py-1 font-mono-num text-xs text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400">深 D (cm)</label>
+              <input
+                type="number"
+                value={newObject.depthCm}
+                onChange={(e) =>
+                  dispatch({
+                    type: 'SET_NEW_OBJECT',
+                    patch: { depthCm: Math.max(20, Number(e.target.value) || 60) },
+                  })
+                }
+                className="mt-0.5 w-full rounded border border-[#2B313C] bg-[#111419] px-2 py-1 font-mono-num text-xs text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-slate-400">高 H (cm)</label>
+              <input
+                type="number"
+                value={newObject.heightCm}
+                onChange={(e) =>
+                  dispatch({
+                    type: 'SET_NEW_OBJECT',
+                    patch: { heightCm: Math.max(20, Number(e.target.value) || 75) },
+                  })
+                }
+                className="mt-0.5 w-full rounded border border-[#2B313C] bg-[#111419] px-2 py-1 font-mono-num text-xs text-slate-100"
+              />
+            </div>
+          </div>
+
+          {/* Cutout Preview + Auto Background Removal Trigger */}
+          {newObject.sourceUrl && (
+            <div className="flex items-center gap-3 rounded-lg border border-[#272D38] bg-[#13161B] p-2">
+              <div
+                className="flex h-14 w-14 shrink-0 items-center justify-center rounded border border-[#2F3644]"
+                style={{
+                  backgroundImage:
+                    'linear-gradient(45deg, #1d222a 25%, transparent 25%), linear-gradient(-45deg, #1d222a 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #1d222a 75%), linear-gradient(-45deg, transparent 75%, #1d222a 75%)',
+                  backgroundSize: '10px 10px',
+                  backgroundPosition: '0 0, 0 5px, 5px -5px, -5px 0px',
+                }}
+              >
+                <img
+                  src={newObject.cutoutUrl || newObject.sourceUrl}
+                  alt="去背預覽"
+                  className="max-h-12 max-w-12 object-contain"
+                />
+              </div>
+              <div className="flex-1 space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="flex items-center gap-1 text-slate-300">
+                    <Scissors className="h-3 w-3 text-emerald-400" />
+                    {newObject.bgRemoved ? '已完成自動去背' : '待執行自動去背'}
+                  </span>
+                  <span className="font-mono-num text-slate-400">
+                    容差 {newObject.bgRemovalThreshold}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={15}
+                  max={75}
+                  value={newObject.bgRemovalThreshold}
+                  onChange={(e) =>
+                    dispatch({
+                      type: 'SET_NEW_OBJECT',
+                      patch: { bgRemovalThreshold: Number(e.target.value) },
+                    })
+                  }
+                  className="cad-slider w-full"
+                />
+              </div>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              if (newObject.sourceUrl) {
+                runPrepareNewObject(
+                  newObject.sourceUrl,
+                  newObject.itemName,
+                  newObject.widthCm,
+                  newObject.depthCm,
+                  newObject.heightCm,
+                  newObject.bgRemovalThreshold
+                );
+              }
+            }}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#C89F72] py-2 text-xs font-bold text-[#111315] hover:bg-[#D8B084] transition cursor-pointer"
+          >
+            <Sparkles className="h-4 w-4" />
+            自動去背並標示 1～3 個建議擺放高亮區
+          </button>
+
+          {/* Suggested Highlight Zones List */}
+          {newObject.suggestedZones.length > 0 && (
+            <div className="space-y-1.5 pt-1">
+              <span className="text-[11px] font-medium text-emerald-300">
+                點擊下方或畫布高亮區直接依透視合成擺放：
+              </span>
+              {newObject.suggestedZones.map((zone) => {
+                const selected = newObject.selectedZoneId === zone.id && newObject.placed;
+                return (
+                  <button
+                    key={zone.id}
+                    type="button"
+                    onClick={() => {
+                      dispatch({ type: 'PLACE_NEW_OBJECT_AT_ZONE', zoneId: zone.id });
+                      dispatch({ type: 'SET_STEP', step: 3 });
+                    }}
+                    className={`w-full rounded-lg border p-2 text-left transition cursor-pointer ${
+                      selected
+                        ? 'border-emerald-400 bg-emerald-500/15'
+                        : 'border-[#2B313C] bg-[#13161B] hover:border-[#C89F72]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-xs font-semibold">
+                      <span className="text-slate-100">{zone.label}</span>
+                      <span className="font-mono-num text-emerald-400">{zone.fitScore} 分</span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-slate-400">{zone.reason}</p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Module 4: Custom Design Prompt & Structured JSON Constraints */}
+      <section className="rounded-xl border border-[#282E39] bg-[#191D24] p-3.5 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-[#DFBA8C]">
+            功能 4｜客製化裝潢需求解析（LLM Constraints）
+          </h3>
+          <Cpu className="h-3.5 w-3.5 text-sky-400" />
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK_CONSTRAINT_TAGS.map((tag) => {
+            const active = localTags.includes(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => toggleTag(tag)}
+                className={`rounded-full border px-2 py-0.5 text-[11px] transition cursor-pointer ${
+                  active
+                    ? 'border-[#C89F72] bg-[#C89F72]/20 text-[#F4E6D4] font-medium'
+                    : 'border-[#2B313C] bg-[#13161B] text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                + {tag}
+              </button>
+            );
+          })}
+        </div>
+
+        <textarea
+          rows={3}
+          value={localText}
+          onChange={(e) => setLocalText(e.target.value)}
+          placeholder="例如：家中有兩隻貓需防抓耐磨材質與貓跳台動線、預算上限 30 萬台幣、增加玄關落塵區與大量收納櫃..."
+          className="w-full rounded-lg border border-[#2B313C] bg-[#111419] p-2.5 text-xs leading-relaxed text-slate-100 placeholder:text-slate-600 focus:border-[#C89F72] focus:outline-none"
+        />
+
+        <button
+          type="button"
+          onClick={() => runParseConstraints(localText, localTags)}
+          className="w-full rounded-md border border-sky-500/40 bg-sky-500/10 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/20 transition cursor-pointer"
+        >
+          LLM 解析為結構化約束條件（JSON）
+        </button>
+
+        {/* Live Structured JSON Constraints Inspector */}
+        <div className="rounded-lg border border-[#252B35] bg-[#0F1216] p-2.5">
+          <div className="mb-1 flex items-center justify-between text-[10px] text-slate-400">
+            <span>注入 AI 管線之 JSON Constraints</span>
+            <span className="font-mono-num text-emerald-400">ACTIVE</span>
+          </div>
+          <pre className="max-h-32 overflow-auto font-mono-num text-[10.5px] leading-relaxed text-slate-300">
+            {JSON.stringify(customPrompt.parsedJson, null, 2)}
+          </pre>
+        </div>
+      </section>
+
+      <button
+        type="button"
+        onClick={() => dispatch({ type: 'SET_STEP', step: 3 })}
+        className="flex w-full items-center justify-center gap-2 rounded-lg border border-[#C89F72]/60 bg-[#C89F72]/15 py-2 text-xs font-semibold text-[#E2BE96] hover:bg-[#C89F72]/25 transition cursor-pointer"
+      >
+        前往步驟三：檢視物理檢測與光影微調
+        <ArrowRight className="h-4 w-4" />
+      </button>
+    </div>
+  );
+};
