@@ -24,13 +24,19 @@ def get_pipe():
     if pipe is None:
         import torch
         from diffusers import AutoPipelineForImage2Image
-        print("Loading SDXL Turbo model into GPU...")
+        print("Loading SDXL Turbo model with memory optimization...")
+        torch.cuda.empty_cache()
         pipe = AutoPipelineForImage2Image.from_pretrained(
             "stabilityai/sdxl-turbo",
             torch_dtype=torch.float16,
             variant="fp16"
-        ).to("cuda")
-        print("Model Loaded!")
+        )
+        # Enable model CPU offload so it uses only ~3.5GB of GPU VRAM instead of 14GB!
+        try:
+            pipe.enable_model_cpu_offload()
+        except Exception:
+            pipe.to("cuda")
+        print("Model Loaded Successfully!")
     return pipe
 
 class RenderRequest(BaseModel):
