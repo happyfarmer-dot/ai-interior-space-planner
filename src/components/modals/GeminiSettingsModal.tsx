@@ -16,9 +16,11 @@ import {
 import {
   GEMINI_IMAGE_MODELS,
   GEMINI_VISION_MODELS,
+  testColabConnection,
   testGeminiConnection,
   updateGeminiRuntimeConfig,
   type GeminiConnectionTestResult,
+  type ImageBackendMode,
 } from '../../services/aiConfig';
 import { useDesignStore } from '../../store/useDesignStore';
 
@@ -29,6 +31,10 @@ export const GeminiSettingsModal: React.FC<{ onClose: () => void }> = ({ onClose
   const [showKey, setShowKey] = useState(false);
   const [visionModel, setVisionModel] = useState(geminiConfig.visionModel);
   const [imageModel, setImageModel] = useState(geminiConfig.imageModel);
+  const [imageBackend, setImageBackend] = useState<ImageBackendMode>(geminiConfig.imageBackend ?? 'gemini');
+  const [colabApiUrl, setColabApiUrl] = useState(geminiConfig.colabApiUrl ?? '');
+  const [testingColab, setTestingColab] = useState(false);
+  const [colabTestResult, setColabTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<GeminiConnectionTestResult | null>(null);
@@ -67,6 +73,18 @@ export const GeminiSettingsModal: React.FC<{ onClose: () => void }> = ({ onClose
     }
   };
 
+  const handleTestColab = async () => {
+    setTestingColab(true);
+    setColabTestResult(null);
+    clearAiError();
+    try {
+      const res = await testColabConnection(colabApiUrl);
+      setColabTestResult(res);
+    } finally {
+      setTestingColab(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -74,6 +92,8 @@ export const GeminiSettingsModal: React.FC<{ onClose: () => void }> = ({ onClose
         apiKey: apiKeyDraft,
         visionModel,
         imageModel,
+        imageBackend,
+        colabApiUrl,
       });
       clearAiError();
       onClose();
@@ -137,6 +157,81 @@ export const GeminiSettingsModal: React.FC<{ onClose: () => void }> = ({ onClose
               </div>
             </div>
           )}
+
+          {/* Image Generation Backend Switcher: Gemini vs Custom Colab */}
+          <div className="space-y-2.5 rounded-xl border border-[#282E39] bg-[#111419] p-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-[#E2BE96]">生圖引擎來源（圖片生成額度）</span>
+              <span className="rounded bg-[#C89F72]/15 px-1.5 py-0.5 text-[10px] text-[#E2BE96]">
+                支援自有 Colab 免費／Pro 額度
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setImageBackend('gemini')}
+                className={`rounded-lg border p-2.5 text-left transition cursor-pointer ${
+                  imageBackend === 'gemini'
+                    ? 'border-[#C89F72] bg-[#C89F72]/15 text-slate-100'
+                    : 'border-[#282E39] bg-[#16191F] text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <p className="font-bold text-xs">Google Gemini 官方 API</p>
+                <p className="mt-0.5 text-[10.5px] opacity-80">Nano Banana 2.1 雲端生圖</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setImageBackend('colab')}
+                className={`rounded-lg border p-2.5 text-left transition cursor-pointer ${
+                  imageBackend === 'colab'
+                    ? 'border-emerald-400 bg-emerald-500/15 text-slate-100'
+                    : 'border-[#282E39] bg-[#16191F] text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <p className="font-bold text-xs">我的 Google Colab GPU</p>
+                <p className="mt-0.5 text-[10.5px] opacity-80">ngrok / Tunnel 自訂 API 網址</p>
+              </button>
+            </div>
+
+            {imageBackend === 'colab' && (
+              <div className="space-y-2 rounded-lg border border-emerald-500/35 bg-emerald-950/20 p-2.5">
+                <label
+                  htmlFor="colab-api-url-input"
+                  className="block text-[11px] font-semibold text-emerald-300"
+                >
+                  Colab 公開 API 網址（將呼叫 POST /api/generate）
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    id="colab-api-url-input"
+                    type="url"
+                    value={colabApiUrl}
+                    onChange={(e) => setColabApiUrl(e.target.value)}
+                    placeholder="https://xxxx-xx-xx.ngrok-free.app"
+                    className="min-w-0 flex-1 rounded-lg border border-[#2D3442] bg-[#0B0D10] px-3 py-1.5 font-mono-num text-xs text-slate-100 placeholder:text-slate-600 focus:border-emerald-400 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={testingColab || !colabApiUrl.trim()}
+                    onClick={handleTestColab}
+                    className="shrink-0 rounded-lg border border-emerald-500/45 bg-emerald-500/20 px-2.5 py-1.5 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-40 cursor-pointer"
+                  >
+                    {testingColab ? '測試中...' : '測試連線'}
+                  </button>
+                </div>
+                {colabTestResult && (
+                  <p
+                    className={`text-[11px] font-medium ${
+                      colabTestResult.ok ? 'text-emerald-300' : 'text-rose-300'
+                    }`}
+                  >
+                    {colabTestResult.ok ? '✓ ' : '⚠ '}
+                    {colabTestResult.message}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* API Key Input */}
           <div className="space-y-2 rounded-xl border border-[#282E39] bg-[#111419] p-3.5">

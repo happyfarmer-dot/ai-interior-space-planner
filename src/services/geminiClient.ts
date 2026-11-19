@@ -365,6 +365,71 @@ async function callGeminiVisionJson<T>(
   );
 }
 
+async function callColabImageEdit(params: {
+  colabUrl: string;
+  prompt: string;
+  images: EncodedInlineImage[];
+  targetWidth: number;
+  targetHeight: number;
+  signal?: AbortSignal;
+}): Promise<{ imageDataUrl: string; modelUsed: string; textNote: string | null }> {
+  const baseUrl = params.colabUrl.trim().replace(/\/+$/, '');
+  const primaryImage = params.images[0];
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      signal: params.signal,
+      body: JSON.stringify({
+        image: primaryImage ? `data:${primaryImage.mimeType};base64,${primaryImage.data}` : '',
+        reference_images: params.images.slice(1).map((img) => `data:${img.mimeType};base64,${img.data}`),
+        prompt: params.prompt,
+        negative_prompt: 'distorted walls, deformed furniture, blurry, lowres, watermark',
+        width: params.targetWidth,
+        height: params.targetHeight,
+      }),
+    });
+  } catch (err) {
+    if (isAbortError(err) || params.signal?.aborted) {
+      throw new GeminiServiceError('ABORTED', '已取消生成');
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new GeminiServiceError(
+      'NETWORK_ERROR',
+      `無法連線至您的 Colab GPU 後端（${baseUrl}）：${msg}。請確認 Colab 儲存格與 ngrok 仍在執行中。`
+    );
+  }
+
+  if (!response.ok) {
+    throw new GeminiServiceError(
+      'NETWORK_ERROR',
+      `Colab GPU 後端回應錯誤（HTTP ${response.status}），請檢查 Colab 執行日誌。`
+    );
+  }
+
+  const data = (await response.json()) as { image?: string; note?: string; model?: string };
+  if (!data?.image) {
+    throw new GeminiServiceError(
+      'INVALID_RESPONSE',
+      'Colab GPU 後端未回傳有效的 image 欄位（預期 Base64 或 Data URL）。'
+    );
+  }
+
+  const imageDataUrl = data.image.startsWith('data:')
+    ? data.image
+    : `data:image/png;base64,${data.image}`;
+
+  return {
+    imageDataUrl,
+    modelUsed: data.model || 'colab-gpu',
+    textNote: data.note || '已透過您的 Google Colab GPU 免費／自有額度完成實景渲染。',
+  };
+}
+
 async function callGeminiImageEdit(params: {
   prompt: string;
   images: EncodedInlineImage[];
@@ -375,8 +440,18 @@ async function callGeminiImageEdit(params: {
   if (params.signal?.aborted) {
     throw new GeminiServiceError('ABORTED', '已取消生成');
   }
-  const apiKey = requireApiKey();
   const cfg = getGeminiRuntimeConfig();
+  if (cfg.imageBackend === 'colab' && cfg.colabApiUrl.trim()) {
+    return callColabImageEdit({
+      colabUrl: cfg.colabApiUrl,
+      prompt: params.prompt,
+      images: params.images,
+      targetWidth: params.targetWidth,
+      targetHeight: params.targetHeight,
+      signal: params.signal,
+    });
+  }
+  const apiKey = requireApiKey();
   const candidateModels = Array.from(
     new Set([cfg.imageModel, ...FALLBACK_IMAGE_CHAIN].filter(Boolean))
   );

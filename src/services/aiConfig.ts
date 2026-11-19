@@ -66,10 +66,14 @@ export const GEMINI_IMAGE_MODELS: GeminiModelOption[] = [
 export const DEFAULT_VISION_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_IMAGE_MODEL = 'gemini-nano-banana-2.1';
 
+export type ImageBackendMode = 'gemini' | 'colab';
+
 export interface GeminiRuntimeConfig {
   apiKey: string;
   visionModel: string;
   imageModel: string;
+  imageBackend: ImageBackendMode;
+  colabApiUrl: string;
   discoveredModels: string[];
   lastTestedAt: string | null;
 }
@@ -103,6 +107,8 @@ function readSyncInitialConfig(): GeminiRuntimeConfig {
     apiKey: getEnvDefaultApiKey(),
     visionModel: getEnvDefaultVisionModel(),
     imageModel: getEnvDefaultImageModel(),
+    imageBackend: 'gemini',
+    colabApiUrl: '',
     discoveredModels: [],
     lastTestedAt: null,
   };
@@ -116,6 +122,8 @@ function readSyncInitialConfig(): GeminiRuntimeConfig {
       apiKey: (parsed.apiKey ?? fallback.apiKey).trim(),
       visionModel: (parsed.visionModel || fallback.visionModel).trim(),
       imageModel: (parsed.imageModel || fallback.imageModel).trim(),
+      imageBackend: parsed.imageBackend === 'colab' ? 'colab' : 'gemini',
+      colabApiUrl: (parsed.colabApiUrl ?? '').trim(),
       discoveredModels: Array.isArray(parsed.discoveredModels) ? parsed.discoveredModels : [],
       lastTestedAt: parsed.lastTestedAt ?? null,
     };
@@ -148,6 +156,13 @@ export function hasGeminiApiKey(): boolean {
   return Boolean(cachedConfig.apiKey.trim());
 }
 
+export function hasImageGenerationBackend(): boolean {
+  if (cachedConfig.imageBackend === 'colab' && cachedConfig.colabApiUrl.trim()) {
+    return true;
+  }
+  return Boolean(cachedConfig.apiKey.trim());
+}
+
 export async function updateGeminiRuntimeConfig(
   patch: Partial<GeminiRuntimeConfig>
 ): Promise<GeminiRuntimeConfig> {
@@ -157,6 +172,14 @@ export async function updateGeminiRuntimeConfig(
     apiKey: (patch.apiKey !== undefined ? patch.apiKey : cachedConfig.apiKey).trim(),
     visionModel: (patch.visionModel || cachedConfig.visionModel || DEFAULT_VISION_MODEL).trim(),
     imageModel: (patch.imageModel || cachedConfig.imageModel || DEFAULT_IMAGE_MODEL).trim(),
+    imageBackend:
+      patch.imageBackend !== undefined ? patch.imageBackend : cachedConfig.imageBackend,
+    colabApiUrl: (patch.colabApiUrl !== undefined
+      ? patch.colabApiUrl
+      : cachedConfig.colabApiUrl
+    )
+      .trim()
+      .replace(/\/+$/, ''),
   };
   await savePref(GEMINI_CONFIG_STORAGE_KEY, JSON.stringify(cachedConfig));
   notifyListeners();
@@ -173,6 +196,8 @@ export async function hydrateGeminiConfigFromNativePrefs(): Promise<GeminiRuntim
       apiKey: (parsed.apiKey ?? cachedConfig.apiKey).trim(),
       visionModel: (parsed.visionModel || cachedConfig.visionModel).trim(),
       imageModel: (parsed.imageModel || cachedConfig.imageModel).trim(),
+      imageBackend: parsed.imageBackend === 'colab' ? 'colab' : cachedConfig.imageBackend,
+      colabApiUrl: (parsed.colabApiUrl ?? cachedConfig.colabApiUrl).trim(),
       discoveredModels: Array.isArray(parsed.discoveredModels)
         ? parsed.discoveredModels
         : cachedConfig.discoveredModels,
@@ -303,15 +328,56 @@ export async function testGeminiConnection(
   }
 }
 
+export async function testColabConnection(
+  candidateUrl: string
+): Promise<{ ok: boolean; message: string }> {
+  const cleanUrl = candidateUrl.trim().replace(/\/+$/, '');
+  if (!cleanUrl) {
+    return { ok: false, message: '請先輸入 Colab / ngrok 公開 API 網址。' };
+  }
+  if (!/^https?:\/\//i.test(cleanUrl)) {
+    return { ok: false, message: '網址必須以 https:// 或 http:// 開頭。' };
+  }
+  try {
+    const res = await fetch(`${cleanUrl}/health`, {
+      method: 'GET',
+      headers: {
+        'ngrok-skip-browser-warning': 'true',
+      },
+    });
+    if (res.ok) {
+      return {
+        ok: true,
+        message: `Colab GPU 後端連線成功（${cleanUrl}）！生圖將優先使用您的 Colab 額度。`,
+      };
+    }
+    return {
+      ok: false,
+      message: `Colab 伺服器回應 HTTP ${res.status}，請確認 Colab 儲存格正在執行中且已開放 /health 與 /api/generate 端點。`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      message: `無法連線至 Colab 網址（${msg}）。請確認 ngrok / Cloudflare Tunnel 正常運行且已啟用 CORS。`,
+    };
+  }
+}
+
 export function getAIServiceConfig() {
   const cfg = getGeminiRuntimeConfig();
   const connected = Boolean(cfg.apiKey);
   return {
     mode: connected ? ('live' as const) : ('mock' as const),
+    imageBackend: cfg.imageBackend,
+    colabApiUrl: cfg.colabApiUrl,
     visionModel: cfg.visionModel,
     imageModel: cfg.imageModel,
     vlmEndpoint: `https://generativelanguage.googleapis.com/v1beta/models/${cfg.visionModel}:generateContent`,
-    diffusionEndpoint: `https://generativelanguage.googleapis.com/v1beta/models/${cfg.imageModel}:generateContent`,
+    diffusionEndpoint:
+      cfg.imageBackend === 'colab' && cfg.colabApiUrl
+        ? `${cfg.colabApiUrl}/api/generate`
+        : `https://generativelanguage.googleapis.com/v1beta/models/${cfg.imageModel}:generateContent`,
     llmEndpoint: `https://generativelanguage.googleapis.com/v1beta/models/${cfg.visionModel}:generateContent`,
   };
 }

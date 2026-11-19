@@ -11,6 +11,7 @@ import React, {
 import {
   getGeminiRuntimeConfig,
   hasGeminiApiKey,
+  hasImageGenerationBackend,
   hydrateGeminiConfigFromNativePrefs,
   subscribeGeminiConfig,
   type GeminiRuntimeConfig,
@@ -628,11 +629,11 @@ export const DesignProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!present.scene.imageUrl) return;
     setAiError(null);
 
-    if (!hasGeminiApiKey()) {
+    if (!hasImageGenerationBackend()) {
       handleAiError(
         new GeminiServiceError(
           'MISSING_KEY',
-          '請先設定 Gemini API Key，才能透過 Nano Banana 原生圖像引擎執行高擬真空間風格轉換。',
+          '請先設定 Gemini API Key，或切換至「我的 Google Colab GPU」並填入 Colab 公開網址。',
           true
         )
       );
